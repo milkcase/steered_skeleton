@@ -22,6 +22,7 @@
 /* External variables --------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
+// 云台板不负责 yaw 执行，固定返回空指针，避免在共享 CAN2 上重复控制。
 hello_world::motor::Motor *GetMotorYaw() {
   /* TODO【新人任务】:
    * 返回云台 yaw 关节电机单例（DM-J4310）。
@@ -42,6 +43,7 @@ hello_world::motor::Motor *GetMotorYaw() {
   return nullptr;
 }
 
+// 返回云台板负责的 pitch 电机单例；按 J4310 零力矩初始化，关闭自动使能。
 hello_world::motor::Motor *GetMotorPitch() {
   /* TODO【新人任务】:
    * 返回云台 pitch 关节电机单例（DM-J4310），做法同 GetMotorYaw()。

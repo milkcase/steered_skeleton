@@ -77,6 +77,7 @@ void CAN_Send_Msg(CAN_HandleTypeDef *hcan, uint8_t *msg, uint32_t id,
  * @retval  None
  * @note    此处只取了 8 字节并重新使能接收中断，具体分发由新人实现
  */
+// 处理本板 CAN1 FIFO0 的接收；仅分发本板负责的反馈，最后恢复接收通知。
 void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
   if (hcan == &hcan1) {
@@ -114,6 +115,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
  * @retval  None
  * @note    同上，具体分发由新人实现
  */
+// 处理共享 CAN2 的 FIFO1 接收；按帧格式和反馈 ID 解码本板负责的电机，不发送命令。
 void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
 {
   if (hcan == &hcan2) {

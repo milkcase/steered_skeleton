@@ -22,6 +22,7 @@
 /* External variables --------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
+// 取得本板的原始 DT7 缓存，不检查有效期；控制层应使用快照读取接口。
 hello_world::remote_control::DT7 *GetRemoteControl() {
   /* TODO【新人任务】:
    * 返回遥控器解码对象（DT7）单例。
@@ -40,11 +41,13 @@ hello_world::remote_control::DT7 *GetRemoteControl() {
 /* Private function definitions ----------------------------------------------*/
 
 // 两板各自拥有独立对象；实际只接云台 USART3 时，底盘本地接收一直保持无效。
+// 返回本板唯一的遥控数据管理对象，供 UART 接收层更新数据。
 remote_input::DbusReceiver *GetRemoteControlReceiver() {
   static remote_input::DbusReceiver receiver;
   return &receiver;
 }
 
+// 在临界区中检查超时并复制遥控快照；返回 false 时该输入不得用于驱动电机。
 bool ReadRemoteControl(hello_world::remote_control::DT7 &snapshot) {
   // 同时保护有效期判断和整份数据复制，避免读取到新旧帧混合的控制量。
   remote_input::InterruptLock lock;

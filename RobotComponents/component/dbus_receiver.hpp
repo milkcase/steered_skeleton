@@ -12,6 +12,8 @@ class DbusReceiver {
  public:
   static constexpr uint32_t kTimeoutMs = 100;
 
+  // 校验并解码一帧 DBUS，now_ms 为接收时刻的毫秒数；成功才刷新在线时间。
+  // 返回 true 表示帧合法；失败立即清除旧输入，返回 false。
   bool accept(const uint8_t *data, std::size_t size, uint32_t now_ms) {
     if (!isValidFrame(data, size)) {
       invalidate();
@@ -23,12 +25,14 @@ class DbusReceiver {
     return true;
   }
 
+  // 使遥控输入立即失效并清空全部控制字段；不会产生任何电机指令。
   void invalidate() {
     // 清除整份旧输入，包括摇杆、拨轮、鼠标和键盘；默认拨杆值不代表动作许可。
     data_ = hello_world::remote_control::DT7{};
     valid_ = false;
   }
 
+  // 按当前毫秒数检查有效期；超时 100 ms 则清缓存，返回是否仍在线。
   bool refresh(uint32_t now_ms) {
     // 无符号减法兼容毫秒计数自然回绕；上电未收到有效帧时始终无效。
     if (!valid_ || static_cast<uint32_t>(now_ms - last_valid_ms_) >= kTimeoutMs) {
@@ -37,6 +41,7 @@ class DbusReceiver {
     return valid_;
   }
 
+  // 检查有效期并复制完整快照；返回 false 时快照已清空，调用者必须禁止输出。
   bool read(hello_world::remote_control::DT7 &snapshot, uint32_t now_ms) {
     const bool online = refresh(now_ms);
     snapshot = data_;
@@ -44,9 +49,11 @@ class DbusReceiver {
   }
 
   // 保留骨架的底层 getter 接口；控制层必须使用带有效期检查的快照读取接口。
+  // 返回内部 DT7 缓存地址供原骨架兼容使用；本接口不检查在线状态。
   hello_world::remote_control::DT7 *raw() { return &data_; }
 
  private:
+  // 检查 18 字节帧长、五通道范围、拨杆及鼠标按键；只校验，不改状态。
   static bool isValidFrame(const uint8_t *p, std::size_t size) {
     if (p == nullptr || size != 18) return false;
     const uint16_t channels[5] = {

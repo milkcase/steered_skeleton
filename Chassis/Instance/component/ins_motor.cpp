@@ -22,6 +22,7 @@
 /* External variables --------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
+// 取得指定轮位的 M3508 单例；越界、未配置或 ID 重复时返回空指针，仅初始化零输入。
 hello_world::motor::Motor *GetMotorWheel(int idx) {
   /* TODO【新人任务】:
    * 返回第 idx 号轮电机（M3508）单例。
@@ -64,6 +65,7 @@ hello_world::motor::Motor *GetMotorWheel(int idx) {
   return &motors[idx];
 }
 
+// 取得指定轮位的 GM6020 单例并应用方向与零偏；无效配置返回空指针，不发送指令。
 hello_world::motor::Motor *GetMotorSteer(int idx) {
   /* TODO【新人任务】:
    * 返回第 idx 号舵电机（GM6020）单例，做法同 GetMotorWheel()。
@@ -95,6 +97,7 @@ hello_world::motor::Motor *GetMotorSteer(int idx) {
   return &motors[idx];
 }
 
+// 取得底盘负责的 yaw 单例；按 J4310 参数初始化，关闭自动使能，配置非法时返回空指针。
 hello_world::motor::Motor *GetMotorYaw() {
   const auto &cfg = vehicle_config::kYaw;
   // 未知型号保持不可用，避免按错误的速度、力矩量程编码。

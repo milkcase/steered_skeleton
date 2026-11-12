@@ -12,21 +12,29 @@ uint8_t *rx_buffer = nullptr;
 uint16_t capacity = 0;
 int starts = 0, aborts = 0;
 HAL_StatusTypeDef start_result = HAL_OK, abort_result = HAL_OK;
+// 返回测试可控的毫秒时间，用于模拟遥控超时与时间回绕。
 uint32_t HAL_GetTick() { return now_ms; }
+// 模拟停止接收，累计调用次数并返回预设结果，不访问真实串口。
 HAL_StatusTypeDef HAL_UART_AbortReceive(UART_HandleTypeDef *) { ++aborts; return abort_result; }
+// 模拟启动 DMA，记录缓冲区、容量和次数，并返回预设的启动结果。
 HAL_StatusTypeDef HAL_UARTEx_ReceiveToIdle_DMA(UART_HandleTypeDef *, uint8_t *p, uint16_t size) {
   ++starts; rx_buffer = p; capacity = size; return start_result;
 }
+// 声明真实接收回调，使测试可以注入模拟 UART 事件。
 extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *, uint16_t);
+// 声明真实错误回调，使测试可以验证串口错误后的失效与恢复。
 extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef *);
+// 为 ARM 无操作系统测试提供内存填充实现，将 n 字节写成指定值，返回原地址。
 extern "C" void *memset(void *p, int v, std::size_t n) {
   auto *q = static_cast<uint8_t *>(p); for (std::size_t i=0;i<n;++i) q[i]=v; return p;
 }
+// 为 ARM 无操作系统测试提供内存复制实现；测试缓冲区互不重叠，返回目标地址。
 extern "C" void *memcpy(void *p, const void *s, std::size_t n) {
   auto *q=static_cast<uint8_t *>(p); const auto *r=static_cast<const uint8_t *>(s);
   for (std::size_t i=0;i<n;++i) q[i]=r[i]; return p;
 }
 
+// 按通道和拨杆参数生成 18 字节 DBUS 测试帧，清零其余字段。
 void frame(uint8_t *p, uint16_t c0=1024, uint16_t c1=1024, uint16_t c2=1024,
            uint16_t c3=1024, uint16_t wheel=1024, uint8_t left=2, uint8_t right=2) {
   memset(p,0,18);
@@ -36,13 +44,16 @@ void frame(uint8_t *p, uint16_t c0=1024, uint16_t c1=1024, uint16_t c2=1024,
   for(int i=0;i<6;++i) p[i]=bits>>(8*i);
   p[16]=wheel&255; p[17]=wheel>>8;
 }
+// 把测试数据写入模拟 DMA 缓冲区，再调用真实接收回调并传入指定事件和长度。
 void feed(const uint8_t *p, uint16_t size=18, HAL_UART_RxEventTypeTypeDef event=HAL_UART_RXEVENT_IDLE) {
   memcpy(rx_buffer,p,size>18?18:size); huart3.event=event;
   HAL_UARTEx_RxEventCallback(&huart3,size);
 }
 #define CHECK(x) do { if (!(x)) return __LINE__; } while(0)
+// 按给定绝对误差容差比较两个浮点数，避免精确相等判断受舍入误差影响。
 bool near(float a, float b) { return a-b < 0.00001f && b-a < 0.00001f; }
 
+// 执行本文件全部断言；成功返回 0，失败返回断言所在行号，供 Python 模拟器报告。
 extern "C" int run_tests() {
   using hello_world::remote_control::DT7;
   DT7 snapshot;

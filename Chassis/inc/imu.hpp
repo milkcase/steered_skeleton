@@ -43,4 +43,7 @@
  *     imu.cpp（CMake 已递归 glob *.c*，无需改配置）。
  * ==========================================================================*/
 
+// 第四项：共享实现组合原有 BMI088 初始化与 Mahony，并增加就绪保护。
+#include "imu_device.hpp"
+
 #endif /* HW_COMPONENTS_DEVICES_IMU_IMU_HPP_ */

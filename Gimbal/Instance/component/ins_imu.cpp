@@ -21,6 +21,7 @@
 /* External variables --------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
+// 返回本板独立的 IMU 对象；首次取对象不触碰硬件，必须显式初始化并等待校准。
 hello_world::imu::Imu *GetImu() {
   /* TODO【新人任务】:
    * 返回本板 IMU 单例。
@@ -34,7 +35,8 @@ hello_world::imu::Imu *GetImu() {
    *   - Imu 类的定义见 inc/imu.hpp 的 TODO；本文件只负责实例化并返回地址。
    *   - 姿态角 / 零漂未就绪前，上层状态机应保持在 Dead / Resurrection（见 RobotModules TODO）。
    */
-  return nullptr;
+  static hello_world::imu::Imu imu;
+  return &imu;
 }
 
 /* Private function definitions ----------------------------------------------*/

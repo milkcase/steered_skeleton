@@ -20,6 +20,7 @@
 
 namespace {
 // 在启用接收前创建对象，回调只使用 USART3，不处理 CAN 或其他串口。
+// 返回绑定本板 USART3 和接收单例的 UART 适配器；创建对象不启动接收。
 remote_input::DbusUart &RemoteUart() {
   static remote_input::DbusUart uart(huart3, *GetRemoteControlReceiver());
   return uart;
@@ -27,6 +28,7 @@ remote_input::DbusUart &RemoteUart() {
 }  // namespace
 
 /* Exported function definitions ---------------------------------------------*/
+// 当前实现仅初始化 DBUS 接收；由 main 在串口和 DMA 初始化后调用。
 void CommTaskInit(void) {
   /* TODO【新人任务】:
    * 通讯层一次性初始化：
@@ -39,6 +41,7 @@ void CommTaskInit(void) {
   RemoteUart().init();
 }
 
+// 当前实现仅维护 DBUS 超时和 DMA 重试，留待后续任务接入周期调度。
 void CommTask(void) {
   /* TODO【新人任务】:
    * 每个通讯周期（1ms）调用一次，把各模块 encode 出的 8 字节 CAN 帧发出去：
@@ -59,10 +62,12 @@ void CommTask(void) {
  *      不要在这里重复写 CAN 接收逻辑。
  */
 
+// HAL 接收事件入口：只把 USART3 的事件及长度交给 DBUS 适配器，其他串口忽略。
 extern "C" void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t size) {
   if (huart == &huart3) RemoteUart().onReceive(size);
 }
 
+// HAL 串口错误入口：仅使 USART3 的遥控输入失效并尝试恢复接收。
 extern "C" void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
   if (huart == &huart3) RemoteUart().onError();
 }

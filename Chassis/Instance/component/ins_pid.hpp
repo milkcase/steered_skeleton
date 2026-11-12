@@ -17,6 +17,7 @@
 #define CHASSIS_INSTANCE_INS_PID_HPP_
 
 /* Includes ------------------------------------------------------------------*/
+#include "pid.hpp"
 
 /* Exported macro ------------------------------------------------------------*/
 /* Exported constants --------------------------------------------------------*/
@@ -28,6 +29,8 @@ class Pid;
 }  // namespace hello_world
 /* Exported variables --------------------------------------------------------*/
 /* Exported function prototypes ----------------------------------------------*/
+/* yaw 实接共享 CAN2，位置环由底盘板执行，保持与电机实例的责任归属一致。 */
+hello_world::pid::Pid *GetPidMotorYaw();
 /* 获取第 idx 号轮电机速度环 PID 单例（idx ∈ [0,4)）。 */
 hello_world::pid::Pid *GetPidMotorWheel(int idx);
 /* 获取第 idx 号舵电机角度环 PID 单例（idx ∈ [0,4)）。 */
