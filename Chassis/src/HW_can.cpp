@@ -120,11 +120,12 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO1, &rx_header2,
                              can2_rx_data) == HAL_OK) {
       /* TODO【新人任务】: 同 FIFO0，按 rx_header2.StdId 路由 8 字节 can2_rx_data。 */
-      // 拓扑图中底盘 CAN2 连接四台驱动电机；先按总线隔离，再按反馈 ID 匹配。
+      // 两板 CAN2 共线，包含驱动轮、yaw、pitch 和板间报文。
+      // 本板只解码自己负责的驱动轮与 yaw；其余帧当前丢弃，板间协议后续接入。
       // 此处仅更新反馈，不设置电机输入，也不发送使能或运动命令。
       if (rx_header2.IDE == CAN_ID_STD && rx_header2.RTR == CAN_RTR_DATA &&
           rx_header2.DLC == 8) {
-        // yaw 实接底盘 CAN2，MIT 反馈帧为设备 ID + 0x10，与驱动反馈分开。
+        // yaw 由底盘负责，MIT 反馈帧为设备 ID + 0x10，与驱动反馈分开。
         auto *yaw = GetMotorYaw();
         if (yaw != nullptr &&
             rx_header2.StdId == hello_world::motor::DaMiao::GetRxId(yaw->motor_info().id)) {

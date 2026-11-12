@@ -88,7 +88,7 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
        *   - 命中双板通讯帧 ID：调用自己的 GimbalChassisComm 解码；
        *   - 都未命中：丢弃（返回前记得重新使能接收中断，见下方调用）。
        */
-      // 本板 CAN1 是板间总线；协议属于第八项，目前不将其数据交给电机。
+      // 按用户确认，板间通信走两板共线的 CAN2；本板 CAN1 暂无分发对象。
     }
   }
   HAL_CAN_ActivateNotification(hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
@@ -106,7 +106,8 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
     if (HAL_CAN_GetRxMessage(hcan, CAN_RX_FIFO1, &rx_header2,
                              can2_rx_data) == HAL_OK) {
       /* TODO【新人任务】: 同 FIFO0，按 rx_header2.StdId 路由 8 字节 can2_rx_data。 */
-      // 按拓扑图，本板 CAN2 只处理 pitch；yaw 反馈在底盘板处理。
+      // 两板 CAN2 共线，本板同样能收到驱动轮与 yaw 反馈，但只解码自己负责的 pitch。
+      // 这只是软件分工；其余帧当前丢弃，板间协议在后续任务中接入同一回调。
       if (rx_header2.IDE == CAN_ID_STD && rx_header2.RTR == CAN_RTR_DATA &&
           rx_header2.DLC == 8) {
         auto *pitch = GetMotorPitch();

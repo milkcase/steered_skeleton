@@ -22,11 +22,14 @@ inline constexpr WheelPosition kWheelPositions[4] = {
 
 enum class Board : uint8_t { Chassis, Gimbal };
 enum class CanBus : uint8_t { Can1, Can2 };
+// 按用户确认的实车接线，两板 CAN2 并接在同一条物理总线上。
+// 板间协议也使用各板本地的 hcan2；其收发实现留到通信协议任务。
+inline constexpr CanBus kBoardCommBus = CanBus::Can2;
 enum class Model : uint8_t { Unconfigured, M3508, GM6020, DM_J4310 };
 
 struct MotorConfig {
-  Board board;
-  CanBus bus;
+  Board board;        // 唯一控制责任板；共线设备可被两板接收，但只能由责任板发控制命令。
+  CanBus bus;         // 责任板本地 CAN 接口，两板 Can2 对应同一条物理总线。
   Model model;
   uint8_t id;          // 设备 ID，不是 CAN 反馈帧 ID；0 表示轮位对应关系尚未确认。
   bool reversed;      // true 表示电机正方向与规定正方向相反。
@@ -50,7 +53,8 @@ inline constexpr MotorConfig kSteers[4] = {
     {Board::Chassis, CanBus::Can1, Model::GM6020, 0, true, 1.58518f, false},
 };
 
-// 以拓扑图为准：yaw 的实际执行板是底盘板 CAN2，pitch 是云台板 CAN2。
+// 以用户确认的实车接线为准：yaw、pitch 与驱动轮共用两板相连的 CAN2。
+// 软件分工为底盘控制 yaw、云台控制 pitch；board 表示责任归属，不代表总线隔离。
 // 按用户要求暂按 DM_J4310 建模；方向、偏移暂用考核说明值，现场仍需复核。
 // configured=true 只允许创建零输入实例；不启用电机，不代表实物已验证。
 inline constexpr MotorConfig kYaw{
