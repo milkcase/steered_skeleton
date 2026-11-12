@@ -14,6 +14,7 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "ins_comm.hpp"
+#include "dbus_uart.hpp"
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
 /* Private types -------------------------------------------------------------*/
@@ -33,7 +34,19 @@ hello_world::remote_control::DT7 *GetRemoteControl() {
    *   - DT7 只负责解码 18 字节 DBUS，串口收发在 Task/component/comm_task.cpp 完成。
    *   - 解码入口：Task/component/comm_task.cpp 的 HAL_UARTEx_RxEventCallback。
    */
-  return nullptr;
+  return GetRemoteControlReceiver()->raw();
 }
 
 /* Private function definitions ----------------------------------------------*/
+
+// 两板各自拥有独立对象；实际只接云台 USART3 时，底盘本地接收一直保持无效。
+remote_input::DbusReceiver *GetRemoteControlReceiver() {
+  static remote_input::DbusReceiver receiver;
+  return &receiver;
+}
+
+bool ReadRemoteControl(hello_world::remote_control::DT7 &snapshot) {
+  // 同时保护有效期判断和整份数据复制，避免读取到新旧帧混合的控制量。
+  remote_input::InterruptLock lock;
+  return GetRemoteControlReceiver()->read(snapshot, HAL_GetTick());
+}

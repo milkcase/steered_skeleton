@@ -18,6 +18,7 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "DT7.hpp"
+#include "dbus_receiver.hpp"
 /* Exported macro ------------------------------------------------------------*/
 /* Exported constants --------------------------------------------------------*/
 /* Exported types ------------------------------------------------------------*/
@@ -26,5 +27,10 @@
 /* Exported function prototypes ----------------------------------------------*/
 /* 获取遥控器解码对象（DT7）单例。 */
 hello_world::remote_control::DT7 *GetRemoteControl();
+
+/* 仅用于接收层接线，不能把取得此对象当作遥控器已经在线。 */
+remote_input::DbusReceiver *GetRemoteControlReceiver();
+/* 控制层读取入口：原子复制快照；返回 false 时输入无效，禁止驱动电机。 */
+bool ReadRemoteControl(hello_world::remote_control::DT7 &snapshot);
 
 #endif /* CHASSIS_INSTANCE_INS_COMM_HPP_ */
