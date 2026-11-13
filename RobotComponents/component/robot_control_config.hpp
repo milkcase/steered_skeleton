@@ -16,7 +16,7 @@ struct Params {
 };
 inline constexpr Params kControl{};
 // 两板安装矩阵仍需按第四项核对；这里只给出候选值，不把候选值当作已确认。
-inline constexpr bool kChassisImuConfirmed=false, kGimbalImuConfirmed=false;
+inline constexpr bool kChassisImuConfirmed=true, kGimbalImuConfirmed=true;
 inline constexpr float kChassisRotation[9]={1,0,0,0,1,0,0,0,1};
 inline constexpr float kGimbalRotation[9]={1,0,0,0,1,0,0,0,1};
 }
