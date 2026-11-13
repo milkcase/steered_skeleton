@@ -1,0 +1,17 @@
+{
+    "folders": [
+        {
+            "name": "Chassis",
+            "path": "Chassis"
+        },
+        {
+            "name": "Gimbal",
+            "path": "Gimbal"
+        }
+    ],
+    "settings": {
+        "cmake.sourceDirectory": "${workspaceFolder}",
+        "cmake.useCMakePresets": "always",
+        "cmake.autoSelectActiveFolder": false
+    }
+}

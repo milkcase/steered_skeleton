@@ -40,17 +40,20 @@ struct MotorConfig {
 // 数组下标固定为：0 左前、1 左后、2 右后、3 右前。
 // 图中只给出设备 ID 范围 1～4，没有给出轮位对应关系，故不猜测分配。
 // 方向和偏移暂录考核说明中的数值；两辆车仍需分别核对、标定。
+// 上述未分配说明为早期记录；用户现已确认：驱动、转向均为左前1、左后2、右后3、右前4。
+// 按确认结果补齐原待填 ID；configured 仅代表配置录入，不放开动力及其他安全联锁。
+// 此对应关系用于本次确认的车辆，另一辆车使用前仍须独立核对。
 inline constexpr MotorConfig kWheels[4] = {
-    {Board::Chassis, CanBus::Can2, Model::M3508, 0, false, 0.0f, false},
-    {Board::Chassis, CanBus::Can2, Model::M3508, 0, false, 0.0f, false},
-    {Board::Chassis, CanBus::Can2, Model::M3508, 0, false, 0.0f, false},
-    {Board::Chassis, CanBus::Can2, Model::M3508, 0, false, 0.0f, false},
+    {Board::Chassis, CanBus::Can2, Model::M3508, 1, false, 0.0f, true},
+    {Board::Chassis, CanBus::Can2, Model::M3508, 2, false, 0.0f, true},
+    {Board::Chassis, CanBus::Can2, Model::M3508, 3, false, 0.0f, true},
+    {Board::Chassis, CanBus::Can2, Model::M3508, 4, false, 0.0f, true},
 };
 inline constexpr MotorConfig kSteers[4] = {
-    {Board::Chassis, CanBus::Can1, Model::GM6020, 0, true, 2.61346f, false},
-    {Board::Chassis, CanBus::Can1, Model::GM6020, 0, true, -2.06844f, false},
-    {Board::Chassis, CanBus::Can1, Model::GM6020, 0, true, 0.00729f, false},
-    {Board::Chassis, CanBus::Can1, Model::GM6020, 0, true, 1.58518f, false},
+    {Board::Chassis, CanBus::Can1, Model::GM6020, 1, true, 2.61346f, true},
+    {Board::Chassis, CanBus::Can1, Model::GM6020, 2, true, -2.06844f, true},
+    {Board::Chassis, CanBus::Can1, Model::GM6020, 3, true, 0.00729f, true},
+    {Board::Chassis, CanBus::Can1, Model::GM6020, 4, true, 1.58518f, true},
 };
 
 // 以用户确认的实车接线为准：yaw、pitch 与驱动轮共用两板相连的 CAN2。
