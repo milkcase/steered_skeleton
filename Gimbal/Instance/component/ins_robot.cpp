@@ -14,6 +14,10 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "ins_robot.hpp"
+#include "gimbal.hpp"
+#include "gimbal_control_config.hpp"
+#include "ins_motor.hpp"
+#include "ins_pid.hpp"
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
 /* Private types -------------------------------------------------------------*/
@@ -36,12 +40,15 @@ robot::Robot *GetRobot() {
   return nullptr;
 }
 
+// 返回云台板的 pitch 位置环；绑定已配置的 J4310 实例和独立 PID，不使能、不发送。
 robot::Gimbal *GetGimbal() {
   /* TODO【新人任务】:
    * 返回 Gimbal 模块 robot::Gimbal 单例，做法同 GetRobot()。
    * robot::Gimbal 类定义由你在 RobotModules/component/gimbal.hpp 补全。
    */
-  return nullptr;
+  static robot::Gimbal gimbal(robot::Gimbal::Axis::Pitch,
+      static_cast<hello_world::motor::DaMiao *>(GetMotorPitch()),GetPidMotorPitch(),gimbal_control_config::kPitch);
+  return &gimbal;
 }
 
 /* Private function definitions ----------------------------------------------*/
