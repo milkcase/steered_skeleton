@@ -3,6 +3,8 @@
 #include "robot_runtime.hpp"
 #include "board_comm_task.hpp"
 #include "can.h"
+#include "motor_GM6020.hpp"
+#include "motor_M3508.hpp"
 namespace robot {
 // 本板唯一的电机发送层，不发送非本板负责的关节，不在此生成运动目标。
 class RobotCanService {
@@ -65,13 +67,15 @@ class RobotCanService {
     uint32_t mailbox=0;
     if(HAL_CAN_AddTxMessage(can,&header,data,&mailbox)==HAL_OK) {
       const uint32_t now=hello_world::tick::GetTickMs();
-      if(id==0x200) {if(can==&hcan1)last_steer_ms_=now;else last_wheel_ms_=now;}
+      if(can==&hcan1 && id==hello_world::motor::GM6020::GetTxId(1,hello_world::motor::InputType::kRaw))last_steer_ms_=now;
+      else if(can==&hcan2 && id==hello_world::motor::M3508::GetTxId(1))last_wheel_ms_=now;
       else if(id<16)last_axis_ms_=now;
       return true;
     }
     robot_->setTransportReady(false);abortOld();return false;
   }
   // ID1..4 的各电机仅改自己两字节，合并后只发一次 0x200；保护时不使用残留编码。
+  // 协议复核修正：CAN1 GM6020 的 kRaw 为 0x1FF，CAN2 M3508 为 0x200，实际 ID 以驱动 API 为准。
   void sendGroup(CAN_HandleTypeDef *can,hello_world::motor::Motor *const motors[4],bool control) {
     uint8_t data[8]{};
     if(control && robot_->controlStillSafe()) {
@@ -82,7 +86,10 @@ class RobotCanService {
         }
       }
     }
-    send(can,0x200,data);
+    const uint32_t id=can==&hcan1?
+        hello_world::motor::GM6020::GetTxId(1,hello_world::motor::InputType::kRaw):
+        hello_world::motor::M3508::GetTxId(1);
+    send(can,id,data);
   }
   // 只发送明确的使能/失能命令；恢复使能受遥控、自检和 Supervisor 的时间窗口约束。
   void axisCommand(uint8_t command) {

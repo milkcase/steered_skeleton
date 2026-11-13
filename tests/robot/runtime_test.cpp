@@ -160,8 +160,8 @@ extern "C" int run_tests() {
     const auto &f=frames[i];
     if(f.id==1 && f.data[0]==255 && f.data[7]==0xFC)enabled=true;
     if(f.id==1 && f.data[0]!=255)CHECK((f.data[3]&15)==0 && f.data[4]==0 && f.data[5]==0 && (f.data[6]&0xF0)==0);
-    if(f.id==0x200 && f.can==&hcan1)steer_seen=true;
-    if(f.id==0x200 && f.can==&hcan2 && f.data[1]!=0 && f.data[3]!=0 && f.data[5]!=0 && f.data[7]!=0)wheel_nonzero=true;
+    if(f.id==GM6020::GetTxId(1,InputType::kRaw) && f.can==&hcan1)steer_seen=true;
+    if(f.id==M3508::GetTxId(1) && f.can==&hcan2 && f.data[1]!=0 && f.data[3]!=0 && f.data[5]!=0 && f.data[7]!=0)wheel_nonzero=true;
   }
   CHECK(enabled);
 #if defined(TEST_CHASSIS)
@@ -175,7 +175,7 @@ extern "C" int run_tests() {
   bool disabled=false;
   for(uint32_t i=before;i<frame_count;++i) {
     const auto &f=frames[i];if(f.id==1 && f.data[7]==0xFD)disabled=true;
-    if(f.id==0x200)for(uint8_t byte:f.data)CHECK(byte==0);
+    if(f.id==M3508::GetTxId(1) || f.id==GM6020::GetTxId(1,InputType::kRaw))for(uint8_t byte:f.data)CHECK(byte==0);
   }
   CHECK(disabled);
 #if defined(TEST_CHASSIS)

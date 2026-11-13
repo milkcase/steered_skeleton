@@ -214,7 +214,7 @@ bool DaMiao::decodeFdb(const uint8_t* data)
   angle_ = normAngle(actual_ang - motor_info_.angle_offset);
   vel_raw_ = static_cast<float>(motor_info_.dir) *
              Uint2Float(
-                 static_cast<int16_t>((data[3] << 4) | (data[3] >> 4)),
+                 static_cast<int16_t>((data[3] << 4) | (data[4] >> 4)),
                  getMaxVel(), -getMaxVel(), kVelBits_) /
              motor_info_.redu_rat;
   vel_ = calcVel();

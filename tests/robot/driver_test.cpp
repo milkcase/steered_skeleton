@@ -17,5 +17,11 @@ extern "C" int run_tests() {
   CHECK(switching.current_ctrl_mode()==DaMiao::CtrlMode::kUnknown && !switching.is_enabled());
   DM_J4310 constructed(3,opt,false,false);
   CHECK(constructed.current_ctrl_mode()==DaMiao::CtrlMode::kMIT && !constructed.is_enabled());
+  // 反馈速度低四位来自 data[4] 高半字节；改变它不得污染位置和力矩字段。
+  uint8_t feedback[8]={0x11,0x80,0,0x80,0,0,30,30};
+  CHECK(motor.decode(feedback));const float velocity=motor.vel(),position=motor.angle(),torque=motor.torq();
+  feedback[4]=0xF0;CHECK(motor.decode(feedback));
+  CHECK(motor.vel()>velocity && std::fabs(motor.vel()-velocity-15.0f*42.0f/4095.0f)<0.00001f);
+  CHECK(motor.angle()==position && motor.torq()==torque);
   return 0;
 }

@@ -21,6 +21,9 @@
 // 第九项可选接线钩子：保留独立 DBUS 模块可测试性，整机固件由 robot_tasks.cpp 提供强定义。
 extern "C" void RobotCommunicationInit() __attribute__((weak));
 extern "C" void RobotCommunicationTick() __attribute__((weak));
+// 第十项：通讯前后记录真实任务进度，末尾才允许按策略刷新 IWDG。
+extern "C" void RobotWatchdogCommBegin() __attribute__((weak));
+extern "C" void RobotWatchdogCommEnd() __attribute__((weak));
 
 namespace {
 // 在启用接收前创建对象，回调只使用 USART3，不处理 CAN 或其他串口。
@@ -60,9 +63,11 @@ void CommTask(void) {
    *   3. 刷新 IWDG。
    */
   // 后续 1ms 调度接入后负责清除过期数据，并重试失败的 DMA 启动。
+  if(RobotWatchdogCommBegin!=nullptr)RobotWatchdogCommBegin();
   RemoteUart().poll();
   // 控制周期已完成决策，再合并/发送本板电机和板间状态；本项不提前喂狗。
   if(RobotCommunicationTick!=nullptr)RobotCommunicationTick();
+  if(RobotWatchdogCommEnd!=nullptr)RobotWatchdogCommEnd();
 }
 
 /* Private function definitions ----------------------------------------------*/

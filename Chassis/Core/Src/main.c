@@ -30,6 +30,7 @@
 /* USER CODE BEGIN Includes */
 #include "comm_task.hpp"  /* 第二项：声明 DBUS 接收初始化，头文件兼容 C。 */
 #include "main_task.hpp"  /* 第九项：顶层初始化和前台传感器入口，保持 C 链接。 */
+#include "watchdog_task.hpp"  /* 第十项：只记录前台进度，喂狗统一在 CommTask 末尾。 */
 
 /* TODO【新人任务】:
  * 在此 include 任务层头文件，例如 #include "main_task.hpp"，
@@ -126,7 +127,9 @@ int main(void) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    RobotWatchdogForeground();
     RobotSensorsPoll();
+    RobotWatchdogForeground();
   }
   /* USER CODE END 3 */
 }

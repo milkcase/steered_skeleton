@@ -18,6 +18,11 @@
 #include "robot_tasks.hpp"
 #include "tim.h"
 
+// 第十项钩子在整机固件中有强定义，独立任务分发测试无需链接硬件看门狗。
+extern "C" void RobotWatchdogInit() __attribute__((weak));
+extern "C" void RobotWatchdogControlBegin() __attribute__((weak));
+extern "C" void RobotWatchdogControlEnd() __attribute__((weak));
+
 /* Exported function definitions ---------------------------------------------*/
 // 创建并注册本板模块，再完成通信接入；此处不使能电机或执行回中。
 void MainTaskInit(void) {
@@ -31,6 +36,7 @@ void MainTaskInit(void) {
    */
   InitializeRobotRuntime();
   CommTaskInit();
+  if(RobotWatchdogInit!=nullptr)RobotWatchdogInit();
 }
 
 // 1 ms 控制入口只转交状态机，不在任务薄层生成电机指令。
@@ -40,7 +46,9 @@ void MainTask(void) {
    * 「读数据 → 迁移 → 生成指令 → 下发」的整条链路。
    * 保持薄薄一层，不要在这里堆业务逻辑。
    */
+  if(RobotWatchdogControlBegin!=nullptr)RobotWatchdogControlBegin();
   RunRobotControl();
+  if(RobotWatchdogControlEnd!=nullptr)RobotWatchdogControlEnd();
 }
 
 /* Private function definitions ----------------------------------------------*/
