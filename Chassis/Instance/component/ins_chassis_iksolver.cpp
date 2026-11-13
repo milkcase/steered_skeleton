@@ -14,6 +14,7 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "ins_chassis_iksolver.hpp"
+#include "chassis_ik_config.hpp"
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
 /* Private types -------------------------------------------------------------*/
@@ -21,6 +22,7 @@
 /* External variables --------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
+// 返回底盘唯一的纯数学逆解器，采用未整定的零动力限幅，不触发任何硬件动作。
 hello_world::chassis_ik_solver::ChassisIkSolver *GetChassisIkSolver() {
   /* TODO【新人任务】:
    * 返回底盘逆解器单例。
@@ -35,7 +37,8 @@ hello_world::chassis_ik_solver::ChassisIkSolver *GetChassisIkSolver() {
    *   - 逆解目标：底盘期望速度 (vx, vy, w) → 各轮目标轮速（麦克纳姆）/ 轮速+舵角（舵向）。
    *   - 逆解公式请自行推导，可参考公开的舵向轮逆运动学资料。
    */
-  return nullptr;
+  static hello_world::chassis_ik_solver::ChassisIkSolver solver(chassis_ik_config::kLimits);
+  return &solver;
 }
 
 /* Private function definitions ----------------------------------------------*/

@@ -14,6 +14,8 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "ins_robot.hpp"
+#include "chassis.hpp"
+#include "ins_chassis_iksolver.hpp"
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
 /* Private types -------------------------------------------------------------*/
@@ -36,12 +38,14 @@ robot::Robot *GetRobot() {
   return nullptr;
 }
 
+// 返回只负责目标解算的底盘模块，绑定同一个逆解器；Robot 状态机仍留待第九项。
 robot::Chassis *GetChassis() {
   /* TODO【新人任务】:
    * 返回 Chassis 模块 robot::Chassis 单例，做法同 GetRobot()。
    * robot::Chassis 类定义由你在 RobotModules/component/chassis.hpp 补全。
    */
-  return nullptr;
+  static robot::Chassis chassis(GetChassisIkSolver());
+  return &chassis;
 }
 
 /* Private function definitions ----------------------------------------------*/

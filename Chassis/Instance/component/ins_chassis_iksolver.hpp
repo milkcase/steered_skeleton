@@ -17,6 +17,7 @@
 #define CHASSIS_INSTANCE_INS_CHASSIS_IKSOLVER_HPP_
 
 /* Includes ------------------------------------------------------------------*/
+#include "chassis_iksolver.hpp"
 
 /* Exported macro ------------------------------------------------------------*/
 /* Exported constants --------------------------------------------------------*/
