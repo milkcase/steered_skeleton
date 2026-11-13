@@ -7,6 +7,10 @@
         {
             "name": "Gimbal",
             "path": "Gimbal"
+        },
+        {
+            "name": "RobotComponents",
+            "path": "RobotComponents"
         }
     ],
     "settings": {
