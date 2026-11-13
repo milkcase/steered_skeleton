@@ -18,6 +18,10 @@
 #include "ins_comm.hpp"
 #include "usart.h"
 
+// 第九项可选接线钩子：保留独立 DBUS 模块可测试性，整机固件由 robot_tasks.cpp 提供强定义。
+extern "C" void RobotCommunicationInit() __attribute__((weak));
+extern "C" void RobotCommunicationTick() __attribute__((weak));
+
 namespace {
 // 在启用接收前创建对象，回调只使用 USART3，不处理 CAN 或其他串口。
 // 返回绑定本板 USART3 和接收单例的 UART 适配器；创建对象不启动接收。
@@ -38,7 +42,13 @@ void CommTaskInit(void) {
    *   3. 启动 / 刷新独立看门狗 IWDG（inc/iwdg.h）。
    */
   // 本项只接通 DBUS 接收，不发送电机命令，不使能电机，也不提前加入喂狗。
+  // main 中已有接收初始化，MainTaskInit 再次调用时保留正在运行的 DMA，不重复启动。
+  static bool dbus_initialized=false;
+  if(!dbus_initialized) {
   RemoteUart().init();
+    dbus_initialized=true;
+  }
+  if(RobotCommunicationInit!=nullptr)RobotCommunicationInit();
 }
 
 // 当前实现仅维护 DBUS 超时和 DMA 重试，留待后续任务接入周期调度。
@@ -51,6 +61,8 @@ void CommTask(void) {
    */
   // 后续 1ms 调度接入后负责清除过期数据，并重试失败的 DMA 启动。
   RemoteUart().poll();
+  // 控制周期已完成决策，再合并/发送本板电机和板间状态；本项不提前喂狗。
+  if(RobotCommunicationTick!=nullptr)RobotCommunicationTick();
 }
 
 /* Private function definitions ----------------------------------------------*/

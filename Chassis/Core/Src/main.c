@@ -29,6 +29,7 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include "comm_task.hpp"  /* 第二项：声明 DBUS 接收初始化，头文件兼容 C。 */
+#include "main_task.hpp"  /* 第九项：顶层初始化和前台传感器入口，保持 C 链接。 */
 
 /* TODO【新人任务】:
  * 在此 include 任务层头文件，例如 #include "main_task.hpp"，
@@ -114,6 +115,7 @@ int main(void) {
 
   /* 第二项：USART3 和 DMA 初始化完成后启动接收；不使能任何电机。 */
   CommTaskInit();
+  MainTaskInit();
   HAL_TIM_Base_Start_IT(&htim2);
   HAL_TIM_Base_Start_IT(&htim6);
   /* USER CODE END 2 */
@@ -124,6 +126,7 @@ int main(void) {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+    RobotSensorsPoll();
   }
   /* USER CODE END 3 */
 }

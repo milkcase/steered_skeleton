@@ -23,6 +23,8 @@ extern "C" {
 /* Exported function prototypes ----------------------------------------------*/
 void MainTaskInit(void);
 void MainTask(void);
+// 前台推进 IMU 初始化与采样；禁止从定时器回调调用。
+void RobotSensorsPoll(void);
 #ifdef __cplusplus
 }
 #endif

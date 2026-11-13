@@ -24,6 +24,7 @@
 #include "ins_motor.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
 #include "gimbal_chassis_comm.hpp"
+#include "motor_feedback.hpp"
 
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
@@ -102,6 +103,8 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
               rx_header1.StdId == hello_world::motor::GM6020::GetRxId(
                                        motor->motor_info().id)) {
             motor->decode(can1_rx_data);
+            // 第九项：只刷新本板该舵机的本地反馈时间，非法编码会撤销有效性。
+            robot_control::MotorFeedbacks().recordDji(idx+4,can1_rx_data,hello_world::tick::GetTickMs());
             break;
           }
         }
@@ -137,6 +140,8 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
         if (yaw != nullptr &&
             rx_header2.StdId == hello_world::motor::DaMiao::GetRxId(yaw->motor_info().id)) {
           yaw->decode(can2_rx_data);
+          // 使能位必须来自新鲜状态帧，不以 getter 非空或转述反馈代替。
+          robot_control::MotorFeedbacks().recordAxis(yaw->motor_info().id,can2_rx_data,hello_world::tick::GetTickMs());
         }
         for (int idx = 0; idx < 4; ++idx) {
           auto *motor = GetMotorWheel(idx);
@@ -144,6 +149,7 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
               rx_header2.StdId == hello_world::motor::M3508::GetRxId(
                                        motor->motor_info().id)) {
             motor->decode(can2_rx_data);
+            robot_control::MotorFeedbacks().recordDji(idx,can2_rx_data,hello_world::tick::GetTickMs());
             break;
           }
         }

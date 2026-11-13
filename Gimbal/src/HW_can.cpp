@@ -24,6 +24,7 @@
 #include "ins_motor.hpp"
 #include "ins_chassis_gimbal_comm.hpp"
 #include "gimbal_chassis_comm.hpp"
+#include "motor_feedback.hpp"
 
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
@@ -121,6 +122,8 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
         if (pitch != nullptr &&
             rx_header2.StdId == hello_world::motor::DaMiao::GetRxId(pitch->motor_info().id)) {
           pitch->decode(can2_rx_data);
+          // 第九项：只记录本板 pitch 的状态反馈；故障/错设备帧不能为闭环续命。
+          robot_control::MotorFeedbacks().recordAxis(pitch->motor_info().id,can2_rx_data,hello_world::tick::GetTickMs());
         }
       }
     }

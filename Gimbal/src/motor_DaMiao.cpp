@@ -539,6 +539,8 @@ void DaMiao::init(uint8_t id,
 
   dm_status_ = DMStatus();
   comm_data_ = CommData();
+  // 禁用自动模式切换时，在状态清零后恢复约定的 MIT 模式，避免被默认 Unknown 覆盖。
+  if (!enable_mode_switch_) dm_status_.current_ctrl_mode = CtrlMode::kMIT;
 }
 
 /* Private function definitions ----------------------------------------------*/

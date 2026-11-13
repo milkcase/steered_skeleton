@@ -17,6 +17,7 @@
 #define GIMBAL_ROBOT_MODULES_ROBOT_HPP_
 
 /* Includes ------------------------------------------------------------------*/
+#include "robot_runtime.hpp"
 /* Exported macro ------------------------------------------------------------*/
 /* Exported constants --------------------------------------------------------*/
 /* Exported types ------------------------------------------------------------*/
@@ -43,4 +44,11 @@
  *   - 急停：遥控器拨到急停位时，必须保证所有电机指令归零（硬性验收项）。
  *   - 状态机的基类 / 迁移机制要自己设计，本骨架不提供（裁判系统 / 超电 / 蜂鸣器等组件本骨架也没有，可忽略）。
  * ==========================================================================*/
+namespace robot {
+class Robot : public RobotRuntime {
+ public:
+  // 云台只绑定本地 pitch，接收 DBUS 并经 CAN 发布底盘/另一轴的目标，不跨板调用对象。
+  Robot() : RobotRuntime(robot_control::Board::Gimbal,robot_control::kControl) {}
+};
+}
 #endif /* GIMBAL_ROBOT_MODULES_ROBOT_HPP_ */
