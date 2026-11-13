@@ -22,6 +22,8 @@
 
 #include "can.h"
 #include "ins_motor.hpp"
+#include "ins_chassis_gimbal_comm.hpp"
+#include "gimbal_chassis_comm.hpp"
 
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
@@ -127,6 +129,9 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
       // 此处仅更新反馈，不设置电机输入，也不发送使能或运动命令。
       if (rx_header2.IDE == CAN_ID_STD && rx_header2.RTR == CAN_RTR_DATA &&
           rx_header2.DLC == 8) {
+        // 第八项：只在共享 CAN2 按对端 ID 分发，协议对象自行检查页号、序号与 CRC。
+        auto *comm=GetGimbalChassisComm();
+        if(comm!=nullptr && rx_header2.StdId==comm->rxId())comm->decode(can2_rx_data);
         // yaw 由底盘负责，MIT 反馈帧为设备 ID + 0x10，与驱动反馈分开。
         auto *yaw = GetMotorYaw();
         if (yaw != nullptr &&

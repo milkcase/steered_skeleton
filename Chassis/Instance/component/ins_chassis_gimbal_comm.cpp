@@ -22,6 +22,7 @@
 /* External variables --------------------------------------------------------*/
 /* Private function prototypes -----------------------------------------------*/
 /* Exported function definitions ---------------------------------------------*/
+// 返回本板唯一协议对象，方向和 CAN ID 固定；仅创建对象，不启动 CAN 或使能电机。
 robot::GimbalChassisComm *GetGimbalChassisComm() {
   /* TODO【新人任务】:
    * 返回本板双板通讯对象单例。
@@ -36,7 +37,9 @@ robot::GimbalChassisComm *GetGimbalChassisComm() {
    *   - 类定义在 RobotComponents/component/gimbal_chassis_comm.hpp（encode/decode 由你实现）。
    *   - CAN ID 建议从 0x200 之后的空闲标准帧 ID 里选，避开电机反馈 ID。
    */
-  return nullptr;
+  using Comm=robot::GimbalChassisComm;
+  static Comm comm(Comm::CodePart::Chassis,Comm::kChassisTxId,Comm::kGimbalTxId);
+  return &comm;
 }
 
 /* Private function definitions ----------------------------------------------*/
