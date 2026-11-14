@@ -14,6 +14,7 @@
 DWT_Type test_dwt;RCC_Type test_rcc;
 uint32_t SystemCoreClock=168000000,test_ms=0,irq_mask=0,aborts=0,stage=0,uart_inits=0;
 uint32_t refresh_attempts=0,control_calls=0,comm_calls=0,init_calls=0;
+uint32_t abort_mask=0;
 bool wrong_feed_order=false;
 HAL_StatusTypeDef refresh_result=HAL_OK;
 IWDG_HandleTypeDef hiwdg;CAN_HandleTypeDef hcan1{1},hcan2{2};
@@ -40,7 +41,9 @@ extern "C" HAL_StatusTypeDef HAL_IWDG_Refresh(IWDG_HandleTypeDef *handle) {
   ++refresh_attempts;if(stage!=3 || handle!=&hiwdg)wrong_feed_order=true;return refresh_result;
 }
 // 记录保护是否撤销原有邮箱。
-extern "C" HAL_StatusTypeDef HAL_CAN_AbortTxRequest(CAN_HandleTypeDef *,uint32_t) {++aborts;return HAL_OK;}
+extern "C" HAL_StatusTypeDef HAL_CAN_AbortTxRequest(CAN_HandleTypeDef *can,uint32_t) {
+  abort_mask|=can==&hcan1?1:2;++aborts;return HAL_OK;
+}
 // 真实 MainTaskInit 仍按原顺序完成本板注册，再初始化通信与看门狗。
 void InitializeRobotRuntime() {++init_calls;test_dwt.CTRL=1;}
 // 只替代完整 Robot 计算，不替代待验证的任务薄层和看门狗，模拟少量执行时间。
@@ -57,6 +60,7 @@ void resetTest() {
   robot_instance=robot::Robot{};robot_instance.stop();robot_instance.transport=true;robot_instance.safe=true;
   test_dwt.CYCCNT=0;test_dwt.CTRL=1;SystemCoreClock=168000000;test_ms=0;irq_mask=0;
   aborts=stage=refresh_attempts=0;wrong_feed_order=false;refresh_result=HAL_OK;
+  abort_mask=0;
   RobotWatchdogInit();
 }
 // 运行真实 TIM6 分发；可独立冻结 HAL 时间或停止前台心跳。
@@ -75,6 +79,7 @@ extern "C" int run_tests() {
 #if !ROBOT_WATCHDOG_REFRESH_ENABLED
   tick(1);d=ReadRobotWatchdogDiagnostics();
   CHECK(d.fault==9 && refresh_attempts==0 && !robot_instance.transport && aborts>0);
+  CHECK(abort_mask==3); // 两板停止喂狗保护均须撤销两个本地 CAN 的旧邮箱。
   for(uint32_t i=2;i<30;++i)tick(i);
   CHECK(refresh_attempts==0 && ReadRobotWatchdogDiagnostics().fault==9);
   return 0;
@@ -89,6 +94,7 @@ extern "C" int run_tests() {
   resetTest();tick(1);const auto before=refresh_attempts;
   for(uint32_t i=2;i<=101;++i)tick(i,false);
   CHECK(ReadRobotWatchdogDiagnostics().fault==6 && !robot_instance.transport && aborts>0);
+  CHECK(abort_mask==3);
   const auto failed=refresh_attempts;tick(102,true);CHECK(refresh_attempts==failed && failed>=before);
   resetTest();tick(1);test_ms=2;test_dwt.CYCCNT=2*168000;CommTask();
   CHECK(ReadRobotWatchdogDiagnostics().fault==3 && refresh_attempts==1 && !robot_instance.transport);

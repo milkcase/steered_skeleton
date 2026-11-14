@@ -25,6 +25,11 @@ enum class CanBus : uint8_t { Can1, Can2 };
 // 按用户确认的实车接线，两板 CAN2 并接在同一条物理总线上。
 // 板间协议也使用各板本地的 hcan2；其收发实现留到通信协议任务。
 inline constexpr CanBus kBoardCommBus = CanBus::Can2;
+// 最新按拓扑颜色更正：灰色为底盘 CAN2 ↔ 云台 CAN1，蓝色为独立的云台 CAN2/pitch。
+// 上述 kBoardCommBus 仅保留为底盘侧历史兼容值；板间接口必须按责任板分别识别。
+inline constexpr CanBus kChassisBoardCommBus = CanBus::Can2;
+inline constexpr CanBus kGimbalBoardCommBus = CanBus::Can1;
+// 以下 MotorConfig.bus 均是责任板本地接口；同名 CAN2 不表示两板之间物理共线。
 enum class Model : uint8_t { Unconfigured, M3508, GM6020, DM_J4310 };
 
 struct MotorConfig {
@@ -60,6 +65,7 @@ inline constexpr MotorConfig kSteers[4] = {
 // 软件分工为底盘控制 yaw、云台控制 pitch；board 表示责任归属，不代表总线隔离。
 // 按用户要求暂按 DM_J4310 建模；方向、偏移暂用考核说明值，现场仍需复核。
 // configured=true 只允许创建零输入实例；不启用电机，不代表实物已验证。
+// 最新更正覆盖上方共线旧说明：yaw/驱动在灰色总线，pitch 在云台 CAN2 蓝色独立总线。
 inline constexpr MotorConfig kYaw{
     Board::Chassis, CanBus::Can2, Model::DM_J4310, 1, false, 1.60879f, true};
 inline constexpr MotorConfig kPitch{

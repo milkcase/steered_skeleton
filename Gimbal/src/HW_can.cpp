@@ -93,6 +93,11 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
        *   - 都未命中：丢弃（返回前记得重新使能接收中断，见下方调用）。
        */
       // 按用户确认，板间通信走两板共线的 CAN2；本板 CAN1 暂无分发对象。
+      // 最新拓扑覆盖上述旧说明：云台 CAN1 与底盘 CAN2 同属灰色总线，只从此处收板间帧。
+      if(rx_header1.IDE==CAN_ID_STD && rx_header1.RTR==CAN_RTR_DATA && rx_header1.DLC==8) {
+        auto *comm=GetGimbalChassisComm();
+        if(comm!=nullptr && rx_header1.StdId==comm->rxId())comm->decode(can1_rx_data);
+      }
     }
   }
   HAL_CAN_ActivateNotification(hcan, CAN_IT_RX_FIFO0_MSG_PENDING);
@@ -113,11 +118,10 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
       /* TODO【新人任务】: 同 FIFO0，按 rx_header2.StdId 路由 8 字节 can2_rx_data。 */
       // 两板 CAN2 共线，本板同样能收到驱动轮与 yaw 反馈，但只解码自己负责的 pitch。
       // 这只是软件分工；其余帧当前丢弃，板间协议在后续任务中接入同一回调。
+      // 最新拓扑覆盖上述旧说明：云台 CAN2 是独立蓝色总线，本回调只接收 pitch 反馈。
       if (rx_header2.IDE == CAN_ID_STD && rx_header2.RTR == CAN_RTR_DATA &&
           rx_header2.DLC == 8) {
         // 第八项：只在共享 CAN2 按对端 ID 分发，协议对象自行检查页号、序号与 CRC。
-        auto *comm=GetGimbalChassisComm();
-        if(comm!=nullptr && rx_header2.StdId==comm->rxId())comm->decode(can2_rx_data);
         auto *pitch = GetMotorPitch();
         if (pitch != nullptr &&
             rx_header2.StdId == hello_world::motor::DaMiao::GetRxId(pitch->motor_info().id)) {

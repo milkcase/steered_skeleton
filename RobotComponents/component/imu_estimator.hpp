@@ -2,6 +2,7 @@
 #define STEERED_IMU_ESTIMATOR_HPP_
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include "mahony.hpp"
 
 namespace hello_world::imu {
@@ -9,6 +10,10 @@ namespace hello_world::imu {
 class ImuEstimator {
  public:
   enum class State { Uninitialized, Calibrating, Aligning, Ready, Fault };
+  // 只读诊断快照，单位分别为 m/s² 和 rad/s；不参与校准、就绪或控制许可。
+  struct SampleDiagnostics {
+    float acc[3],gyro[3],acc_norm,gyro_norm;
+  };
   struct Params {
     uint32_t calibration_samples = 2000;
     uint32_t alignment_samples = 500;
@@ -30,6 +35,9 @@ class ImuEstimator {
 
   // 保存并校验参数；成功后进入静止校准，失败后保持 Fault，返回初始化结果。
   bool begin(const Params &params) {
+    // 显式重启时清除旧记录；NaN 模长表示本轮尚未计算出有效模长。
+    for(int i=0;i<3;++i)last_acc_[i]=last_gyro_[i]=0;
+    last_acc_norm_=last_gyro_norm_=std::numeric_limits<float>::quiet_NaN();
     params_ = params;
     const float positive[] = {params.gravity, params.gravity_tolerance, params.stationary_gyro,
         params.gyro_std_limit, params.acc_std_limit, params.alignment_gyro,
@@ -64,8 +72,15 @@ class ImuEstimator {
   // 返回 true 表示本次采样已处理；是否可用于控制还必须查询 ready(now_us)。
   bool pushSample(const float acc[3], const float gyro[3], uint32_t now_us) {
     if (state_==State::Uninitialized || state_==State::Fault) return false;
+    // 在原检查前留存输入；故障后的入口直接返回，因此故障样本不会被后续调用覆盖。
+    // 空指针或非有限输入仍走原故障路径，诊断记录不修正或替换实际采样。
+    const float unavailable=std::numeric_limits<float>::quiet_NaN();
+    for(int i=0;i<3;++i) {last_acc_[i]=acc?acc[i]:unavailable;last_gyro_[i]=gyro?gyro[i]:unavailable;}
+    last_acc_norm_=last_gyro_norm_=unavailable;
     if (!finiteVector(acc) || !finiteVector(gyro)) return fault();
     const float an=norm(acc), gn=norm(gyro);
+    // 复用原计算结果，不增加滤波或改变原有量程、采样时序判断。
+    last_acc_norm_=an;last_gyro_norm_=gn;
     if (!std::isfinite(an) || !std::isfinite(gn) || an<0.1f || an>35.0f || gn>17.0f) return fault();
     if (timed_) {
       const uint32_t elapsed=now_us-last_us_;
@@ -121,6 +136,11 @@ class ImuEstimator {
   }
   // 返回当前阶段，便于上层区分未初始化、校准、对齐、可用和故障。
   State state() const { return state_; }
+  // 按值读取最近一次样本诊断，供核验和观察使用；修改返回副本不影响内部记录。
+  SampleDiagnostics sampleDiagnostics() const {
+    return {{last_acc_[0],last_acc_[1],last_acc_[2]},
+            {last_gyro_[0],last_gyro_[1],last_gyro_[2]},last_acc_norm_,last_gyro_norm_};
+  }
   // 返回本轮连续静止校准样本数，晃动或方差过大时归零。
   uint32_t calibrationCount() const { return count_; }
   // 返回已完成的姿态对齐样本数，供调试观察收敛进度。
@@ -187,6 +207,10 @@ class ImuEstimator {
   State state_=State::Uninitialized;
   uint32_t count_=0,aligned_=0,last_us_=0;
   bool timed_=false;
+  // Ozone 可直接展开这些成员；Fault 后保留，只有显式 begin/重校准才重新清除。
+  float last_acc_[3]{},last_gyro_[3]{};
+  float last_acc_norm_=std::numeric_limits<float>::quiet_NaN();
+  float last_gyro_norm_=std::numeric_limits<float>::quiet_NaN();
   float gyro_mean_[3]{},gyro_m2_[3]{},acc_mean_[3]{},acc_m2_[3]{};
   float bias_[3]{},angles_[3]{},reference_[4]{1,0,0,0};
 };

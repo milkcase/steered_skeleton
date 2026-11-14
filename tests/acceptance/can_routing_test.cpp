@@ -49,7 +49,11 @@ extern "C" int run_tests() {
   const uint32_t owned=0x11;
 #else
   data[0]=0x12;inject(0x12);CHECK(pitch.decodes==1 && yaw.decodes==0 && robot_control::MotorFeedbacks().axisEnabled(now));
-  data[0]=0x11;inject(0x11);CHECK(yaw.decodes==0 && pitch.decodes==1);
+  // 灰色 CAN1 即使收到相同 pitch ID，也不能更新独立蓝色 CAN2 的本地反馈。
+  inject(0x12,true);CHECK(pitch.decodes==1);
+  now+=100;inject(0x12,true);CHECK(!robot_control::MotorFeedbacks().axisEnabled(now));
+  inject(0x12);CHECK(pitch.decodes==2 && robot_control::MotorFeedbacks().axisEnabled(now));
+  data[0]=0x11;inject(0x11);CHECK(yaw.decodes==0 && pitch.decodes==2);
   for(int i=0;i<4;++i) {inject(0x201+i);inject(0x205+i,true);CHECK(wheels[i].decodes==0 && steers[i].decodes==0);}
   const uint32_t owned=0x12;
 #endif

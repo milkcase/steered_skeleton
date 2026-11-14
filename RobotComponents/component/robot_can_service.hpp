@@ -5,6 +5,7 @@
 #include "can.h"
 #include "motor_GM6020.hpp"
 #include "motor_M3508.hpp"
+#include "vehicle_motor_config.hpp"
 namespace robot {
 // 本板唯一的电机发送层，不发送非本板负责的关节，不在此生成运动目标。
 class RobotCanService {
@@ -17,13 +18,18 @@ class RobotCanService {
   }
   // 在非中断初始化阶段配置 CAN1；CAN2 使用第八项接口，所有 HAL 字段明确初始化。
   bool init() {
-    if(chassis_) {
-      CAN_FilterTypeDef f{};f.FilterBank=0;f.SlaveStartFilterBank=14;
+    // 最新拓扑：底盘先启动 CAN1 舵轮；云台先启动 CAN2 pitch，再启动各自板间接口。
+    // 两路都是必需接口，任一配置、启动或通知失败均不能报告整机通信就绪。
+    static_assert(vehicle_config::kChassisBoardCommBus==vehicle_config::CanBus::Can2);
+    static_assert(vehicle_config::kGimbalBoardCommBus==vehicle_config::CanBus::Can1);
+    {
+      auto *motor_can=chassis_?&hcan1:&hcan2;
+      CAN_FilterTypeDef f{};f.FilterBank=chassis_?0:14;f.SlaveStartFilterBank=14;
       f.FilterMode=CAN_FILTERMODE_IDMASK;f.FilterScale=CAN_FILTERSCALE_32BIT;
-      f.FilterFIFOAssignment=CAN_FILTER_FIFO0;f.FilterActivation=ENABLE;
-      if(HAL_CAN_ConfigFilter(&hcan1,&f)!=HAL_OK ||
-          (HAL_CAN_GetState(&hcan1)!=HAL_CAN_STATE_LISTENING && HAL_CAN_Start(&hcan1)!=HAL_OK) ||
-          HAL_CAN_ActivateNotification(&hcan1,CAN_IT_RX_FIFO0_MSG_PENDING)!=HAL_OK)return false;
+      f.FilterFIFOAssignment=chassis_?CAN_FILTER_FIFO0:CAN_FILTER_FIFO1;f.FilterActivation=ENABLE;
+      if(HAL_CAN_ConfigFilter(motor_can,&f)!=HAL_OK ||
+          (HAL_CAN_GetState(motor_can)!=HAL_CAN_STATE_LISTENING && HAL_CAN_Start(motor_can)!=HAL_OK) ||
+          HAL_CAN_ActivateNotification(motor_can,chassis_?CAN_IT_RX_FIFO0_MSG_PENDING:CAN_IT_RX_FIFO1_MSG_PENDING)!=HAL_OK)return false;
     }
     return StartBoardCommunication();
   }
@@ -57,7 +63,8 @@ class RobotCanService {
  private:
   // 丢弃未发送完的旧命令；只在首次或从活动转保护时调用，不不断撤销新的零帧。
   void abortOld() {
-    if(chassis_)HAL_CAN_AbortTxRequest(&hcan1,CAN_TX_MAILBOX0|CAN_TX_MAILBOX1|CAN_TX_MAILBOX2);
+    // 两板现均使用两个本地控制器：必须同时撤销板间帧和本板电机的旧邮箱。
+    HAL_CAN_AbortTxRequest(&hcan1,CAN_TX_MAILBOX0|CAN_TX_MAILBOX1|CAN_TX_MAILBOX2);
     HAL_CAN_AbortTxRequest(&hcan2,CAN_TX_MAILBOX0|CAN_TX_MAILBOX1|CAN_TX_MAILBOX2);
   }
   // 非阻塞排队；邮箱忙等待下一周期，HAL 真正报错则撤销本板许可并归零。

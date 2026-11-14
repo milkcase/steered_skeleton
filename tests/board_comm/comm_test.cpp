@@ -11,7 +11,17 @@ uint32_t test_now=0,test_irq=0,free_mailboxes=3;
 int notifications=0,sends=0;
 HAL_CAN_StateTypeDef can_state=HAL_CAN_STATE_READY;
 HAL_StatusTypeDef filter_result=HAL_OK,start_result=HAL_OK,send_result=HAL_OK;
+HAL_StatusTypeDef notify_result=HAL_OK;
 CAN_HandleTypeDef hcan1{1},hcan2{2};
+CAN_HandleTypeDef *filtered_can=nullptr,*started_can=nullptr,*notified_can=nullptr,*sent_can=nullptr;
+uint32_t last_notification=0;
+#if defined(TEST_CHASSIS)
+CAN_HandleTypeDef *const expected_comm_can=&hcan2;
+constexpr uint32_t expected_bank=14,expected_fifo=CAN_FILTER_FIFO1,expected_notification=CAN_IT_RX_FIFO1_MSG_PENDING;
+#else
+CAN_HandleTypeDef *const expected_comm_can=&hcan1;
+constexpr uint32_t expected_bank=0,expected_fifo=CAN_FILTER_FIFO0,expected_notification=CAN_IT_RX_FIFO0_MSG_PENDING;
+#endif
 CAN_RxHeaderTypeDef injected_header{};
 CAN_TxHeaderTypeDef sent_header{};
 CAN_FilterTypeDef captured_filter{};
@@ -29,17 +39,18 @@ extern "C" void *memcpy(void *p,const void *s,std::size_t n) {
 // 返回可控毫秒数，模拟时间回绕和断线。
 uint32_t hello_world::tick::GetTickMs() {return test_now;}
 // 捕获滤波器配置，返回测试设置的结果。
-HAL_StatusTypeDef HAL_CAN_ConfigFilter(CAN_HandleTypeDef *,CAN_FilterTypeDef *p) {captured_filter=*p;return filter_result;}
+HAL_StatusTypeDef HAL_CAN_ConfigFilter(CAN_HandleTypeDef *can,CAN_FilterTypeDef *p) {filtered_can=can;captured_filter=*p;return filter_result;}
 // 返回模拟 CAN 状态。
 HAL_CAN_StateTypeDef HAL_CAN_GetState(CAN_HandleTypeDef *) {return can_state;}
 // 模拟 CAN 启动，失败时不改变监听状态。
-HAL_StatusTypeDef HAL_CAN_Start(CAN_HandleTypeDef *) {if(start_result==HAL_OK)can_state=HAL_CAN_STATE_LISTENING;return start_result;}
+HAL_StatusTypeDef HAL_CAN_Start(CAN_HandleTypeDef *can) {started_can=can;if(start_result==HAL_OK)can_state=HAL_CAN_STATE_LISTENING;return start_result;}
 // 记录真实接收源文件是否恢复通知。
-HAL_StatusTypeDef HAL_CAN_ActivateNotification(CAN_HandleTypeDef *,uint32_t) {++notifications;return HAL_OK;}
+HAL_StatusTypeDef HAL_CAN_ActivateNotification(CAN_HandleTypeDef *can,uint32_t notification) {notified_can=can;last_notification=notification;++notifications;return notify_result;}
 // 返回当前可用邮箱，模拟满载。
 uint32_t HAL_CAN_GetTxMailboxesFreeLevel(CAN_HandleTypeDef *) {return free_mailboxes;}
 // 记录拟发送的协议页，不驱动 CAN 适配器。
-HAL_StatusTypeDef HAL_CAN_AddTxMessage(CAN_HandleTypeDef *,CAN_TxHeaderTypeDef *h,uint8_t *p,uint32_t *) {
+HAL_StatusTypeDef HAL_CAN_AddTxMessage(CAN_HandleTypeDef *can,CAN_TxHeaderTypeDef *h,uint8_t *p,uint32_t *) {
+  sent_can=can;
   ++sends;sent_header=*h;memcpy(sent_data,p,8);return send_result;
 }
 // 向真实接收回调提供注入的头部和数据。
@@ -48,6 +59,13 @@ HAL_StatusTypeDef HAL_CAN_GetRxMessage(CAN_HandleTypeDef *,uint32_t,CAN_RxHeader
 }
 // 错误处理空桩；启动失败应通过新服务返回 false，而非进入此分支。
 void Error_Handler() {}
+// 向真实板间接口注入，或刻意注入另一总线，验证正确页也不能从错总线续命。
+void receiveComm(bool wrong_bus=false) {
+  auto *can=expected_comm_can;
+  if(wrong_bus)can=can==&hcan1?&hcan2:&hcan1;
+  if(can==&hcan1)HAL_CAN_RxFifo0MsgPendingCallback(can);
+  else HAL_CAN_RxFifo1MsgPendingCallback(can);
+}
 // 提供本板测试驱动反馈对象。
 hello_world::motor::Motor *GetMotorWheel(int i) {return &wheels[i];}
 // 提供本板测试转向反馈对象。
@@ -161,10 +179,14 @@ extern "C" int run_tests() {
   CHECK(GetGimbalChassisComm()!=nullptr && GetGimbalChassisComm()==GetGimbalChassisComm());
   CHECK(!SendBoardCommunication());filter_result=HAL_ERROR;CHECK(!StartBoardCommunication());filter_result=HAL_OK;
   start_result=HAL_ERROR;CHECK(!StartBoardCommunication());start_result=HAL_OK;
-  CHECK(StartBoardCommunication());CHECK(captured_filter.FilterBank==14 && captured_filter.SlaveStartFilterBank==14);
-  CHECK(captured_filter.FilterFIFOAssignment==CAN_FILTER_FIFO1 && captured_filter.FilterMaskIdLow==0);
+  CHECK(StartBoardCommunication());CHECK(captured_filter.FilterBank==expected_bank && captured_filter.SlaveStartFilterBank==14);
+  CHECK(captured_filter.FilterFIFOAssignment==expected_fifo && captured_filter.FilterMaskIdLow==0);
+  CHECK(filtered_can==expected_comm_can && started_can==expected_comm_can && notified_can==expected_comm_can);
+  CHECK(last_notification==expected_notification);
+  notify_result=HAL_ERROR;CHECK(!StartBoardCommunication());notify_result=HAL_OK;
   free_mailboxes=0;CHECK(!SendBoardCommunication());free_mailboxes=3;
   CHECK(SendBoardCommunication());CHECK(sent_header.DLC==8 && sent_header.IDE==CAN_ID_STD && sent_header.RTR==CAN_RTR_DATA);
+  CHECK(sent_can==expected_comm_can);
 #if defined(TEST_CHASSIS)
   CHECK(sent_header.StdId==0x210);Comm peer(Comm::CodePart::Gimbal,0x211,0x210);activateG(peer);
   Comm::GimbalData peer_data;
@@ -173,11 +195,18 @@ extern "C" int run_tests() {
   Comm::ChassisData peer_data;
 #endif
   pages(peer,frame);CHECK(!ReadPeerBoard(peer_data));
+  // 先给错总线完整三页，不能建立板间在线状态，更不能被分发成电机反馈。
+  for(int i=0;i<3;++i) {
+    injected_header={GetGimbalChassisComm()->rxId(),CAN_ID_STD,CAN_RTR_DATA,8};
+    memcpy(injected_data,frame[i],8);receiveComm(true);
+  }
+  CHECK(!ReadPeerBoard(peer_data));
   for(int i=0;i<3;++i) {
     injected_header={GetGimbalChassisComm()->rxId(),CAN_ID_STD,CAN_RTR_DATA,8};memcpy(injected_data,frame[i],8);
-    HAL_CAN_RxFifo1MsgPendingCallback(&hcan2);
+    receiveComm();
   }
   CHECK(ReadPeerBoard(peer_data) && ReadPeerCommand(peer_data) && PeerCommandsUsable());
+  CHECK(notified_can==expected_comm_can && last_notification==expected_notification);
   CHECK(yaw.decodes==0 && pitch.decodes==0 && wheels[0].decodes==0 && steers[0].decodes==0);
   CHECK(notifications>=3);
   test_irq=1;CHECK(ReadPeerCommand(peer_data) && test_irq==1);test_irq=0;
@@ -189,17 +218,17 @@ extern "C" int run_tests() {
 #endif
   pages(peer,frame);
   for(int i=0;i<3;++i) {
-    memcpy(injected_data,frame[i],8);HAL_CAN_RxFifo1MsgPendingCallback(&hcan2);
+    memcpy(injected_data,frame[i],8);receiveComm();
   }
   CHECK(ReadPeerBoard(peer_data) && peer_data.flags.ready && !PeerCommandsUsable());
   CHECK(!ReadPeerCommand(peer_data) && peer_data.state.life==robot::LifeState::Dead && !peer_data.flags.ready);
   // 错总线、帧长、扩展/远程格式和未知 ID 都不刷新协议在线时间。
   test_now+=100;
-  injected_header.DLC=7;HAL_CAN_RxFifo1MsgPendingCallback(&hcan2);CHECK(!PeerCommandsUsable());
-  injected_header.DLC=8;injected_header.IDE=CAN_ID_EXT;HAL_CAN_RxFifo1MsgPendingCallback(&hcan2);CHECK(!ReadPeerBoard(peer_data));
-  injected_header.IDE=CAN_ID_STD;injected_header.RTR=CAN_RTR_REMOTE;HAL_CAN_RxFifo1MsgPendingCallback(&hcan2);CHECK(!ReadPeerBoard(peer_data));
-  injected_header.RTR=CAN_RTR_DATA;injected_header.StdId=0x333;HAL_CAN_RxFifo1MsgPendingCallback(&hcan2);CHECK(!ReadPeerBoard(peer_data));
-  injected_header.StdId=GetGimbalChassisComm()->rxId();HAL_CAN_RxFifo0MsgPendingCallback(&hcan1);CHECK(!ReadPeerBoard(peer_data));
+  injected_header.DLC=7;receiveComm();CHECK(!PeerCommandsUsable());
+  injected_header.DLC=8;injected_header.IDE=CAN_ID_EXT;receiveComm();CHECK(!ReadPeerBoard(peer_data));
+  injected_header.IDE=CAN_ID_STD;injected_header.RTR=CAN_RTR_REMOTE;receiveComm();CHECK(!ReadPeerBoard(peer_data));
+  injected_header.RTR=CAN_RTR_DATA;injected_header.StdId=0x333;receiveComm();CHECK(!ReadPeerBoard(peer_data));
+  injected_header.StdId=GetGimbalChassisComm()->rxId();receiveComm(true);CHECK(!ReadPeerBoard(peer_data));
   send_result=HAL_ERROR;CHECK(!SendBoardCommunication());
   return 0;
 }

@@ -12,6 +12,12 @@ using namespace robot;
 using namespace hello_world::motor;
 uint32_t test_now=0,free_mailboxes=3,aborts=0,frame_count=0;
 CAN_HandleTypeDef hcan1{},hcan2{};
+bool can1_listening=false,can2_listening=false;
+int can_init_failure=0;
+uint32_t can_abort_mask=0;
+CAN_HandleTypeDef *motor_filter_can=nullptr;
+CAN_FilterTypeDef motor_filter{};
+uint32_t motor_notification=0;
 TIM_HandleTypeDef htim6{},htim2{};
 hello_world::remote_control::DT7 remote;
 bool remote_valid=true;
@@ -27,7 +33,10 @@ extern "C" uint32_t HAL_GetTick() {return test_now;}
 // 返回测试遥控快照，保持 DT7 的真实 decode 和 getter。
 bool ReadRemoteControl(hello_world::remote_control::DT7 &out) {out=remote;return remote_valid;}
 // 模拟所有 CAN 控制器处于已启动状态。
-HAL_CAN_StateTypeDef HAL_CAN_GetState(const CAN_HandleTypeDef *) {return HAL_CAN_STATE_LISTENING;}
+// 本轮进一步分别模拟两个控制器，不能以一条已启动总线掩盖另一条未启动。
+HAL_CAN_StateTypeDef HAL_CAN_GetState(const CAN_HandleTypeDef *can) {
+  return (can==&hcan1?can1_listening:can2_listening)?HAL_CAN_STATE_LISTENING:HAL_CAN_STATE_READY;
+}
 // 返回邮箱余量，用于制造发送拥塞。
 uint32_t HAL_CAN_GetTxMailboxesFreeLevel(const CAN_HandleTypeDef *) {return free_mailboxes;}
 // 记录实际序列化帧，保留总线和 ID，不操作 CAN 适配器。
@@ -36,21 +45,42 @@ HAL_StatusTypeDef HAL_CAN_AddTxMessage(CAN_HandleTypeDef *can,const CAN_TxHeader
   return HAL_OK;
 }
 // 记录撤销旧邮箱动作，模拟硬件取消待发命令。
-HAL_StatusTypeDef HAL_CAN_AbortTxRequest(CAN_HandleTypeDef *,uint32_t) {++aborts;return HAL_OK;}
+HAL_StatusTypeDef HAL_CAN_AbortTxRequest(CAN_HandleTypeDef *can,uint32_t) {can_abort_mask|=can==&hcan1?1:2;++aborts;return HAL_OK;}
 // 本测试不检查滤波器，实际配置已经第八项及生产编译覆盖。
-HAL_StatusTypeDef HAL_CAN_ConfigFilter(CAN_HandleTypeDef *,const CAN_FilterTypeDef *) {return HAL_OK;}
+// 拓扑适配后补查电机侧滤波器和配置失败；原来的不检查说明仅为早期测试范围。
+HAL_StatusTypeDef HAL_CAN_ConfigFilter(CAN_HandleTypeDef *can,const CAN_FilterTypeDef *filter) {
+  motor_filter_can=can;motor_filter=*filter;return can_init_failure==1?HAL_ERROR:HAL_OK;
+}
 // 模拟启动成功。
-HAL_StatusTypeDef HAL_CAN_Start(CAN_HandleTypeDef *) {return HAL_OK;}
+HAL_StatusTypeDef HAL_CAN_Start(CAN_HandleTypeDef *can) {
+  if(can_init_failure==2)return HAL_ERROR;
+  if(can==&hcan1)can1_listening=true;else can2_listening=true;return HAL_OK;
+}
 // 模拟通知使能成功。
-HAL_StatusTypeDef HAL_CAN_ActivateNotification(CAN_HandleTypeDef *,uint32_t) {return HAL_OK;}
+HAL_StatusTypeDef HAL_CAN_ActivateNotification(CAN_HandleTypeDef *,uint32_t notification) {
+  motor_notification=notification;return can_init_failure==3?HAL_ERROR:HAL_OK;
+}
 // 单页接口使用真实线上编码，帮助检查零状态/Working 发布是否正确。
 bool SendBoardCommunication() {
   if(free_mailboxes==0)return false;
   uint8_t data[8];local_comm->encode(data);CAN_TxHeaderTypeDef h{};uint32_t box;
-  h.StdId=local_comm->txId();h.DLC=8;return HAL_CAN_AddTxMessage(&hcan2,&h,data,&box)==HAL_OK;
+  h.StdId=local_comm->txId();h.DLC=8;
+#if defined(TEST_CHASSIS)
+  return HAL_CAN_AddTxMessage(&hcan2,&h,data,&box)==HAL_OK;
+#else
+  return HAL_CAN_AddTxMessage(&hcan1,&h,data,&box)==HAL_OK;
+#endif
 }
 // 模拟板间接口启动，不涉及物理总线。
-bool StartBoardCommunication() {return true;}
+bool StartBoardCommunication() {
+  if(can_init_failure==4)return false;
+#if defined(TEST_CHASSIS)
+  can2_listening=true;
+#else
+  can1_listening=true;
+#endif
+  return true;
+}
 // 记录真实任务薄层调用初始化的次数。
 void InitializeRobotRuntime() {++init_calls;}
 // 记录真实任务薄层将控制交给 Robot 的次数。
@@ -136,7 +166,21 @@ extern "C" int run_tests() {
 #else
   RobotCanService service(&robot,false);
 #endif
-  CHECK(service.init());robot.setTransportReady(true);setRemote(3);
+  // 任一电机接口初始化阶段失败，或板间接口失败，都不能把通信启动报告为成功。
+  for(int failure=1;failure<=4;++failure) {
+    can1_listening=can2_listening=false;can_init_failure=failure;
+    CHECK(!service.init() && !robot.output().control);
+  }
+  can_init_failure=0;can1_listening=can2_listening=false;
+  CHECK(service.init() && can1_listening && can2_listening);
+#if defined(TEST_CHASSIS)
+  CHECK(motor_filter_can==&hcan1 && motor_filter.FilterBank==0 && motor_filter.FilterFIFOAssignment==CAN_FILTER_FIFO0);
+  CHECK(motor_notification==CAN_IT_RX_FIFO0_MSG_PENDING);
+#else
+  CHECK(motor_filter_can==&hcan2 && motor_filter.FilterBank==14 && motor_filter.FilterFIFOAssignment==CAN_FILTER_FIFO1);
+  CHECK(motor_notification==CAN_IT_RX_FIFO1_MSG_PENDING);
+#endif
+  robot.setTransportReady(true);setRemote(3);
   for(int step=0;step<240;++step) {
     test_now=step;robot.pollSensors();
     const bool work=step>=210;
@@ -158,6 +202,12 @@ extern "C" int run_tests() {
   bool enabled=false,wheel_nonzero=false,steer_seen=false;
   for(uint32_t i=0;i<frame_count;++i) {
     const auto &f=frames[i];
+    if(f.id==1)CHECK(f.can==&hcan2); // 本地关节始终 CAN2，云台板间接口改动不能带走 pitch。
+#if defined(TEST_CHASSIS)
+    if(f.id==0x210)CHECK(f.can==&hcan2);
+#else
+    if(f.id==0x211)CHECK(f.can==&hcan1);
+#endif
     if(f.id==1 && f.data[0]==255 && f.data[7]==0xFC)enabled=true;
     if(f.id==1 && f.data[0]!=255)CHECK((f.data[3]&15)==0 && f.data[4]==0 && f.data[5]==0 && (f.data[6]&0xF0)==0);
     if(f.id==GM6020::GetTxId(1,InputType::kRaw) && f.can==&hcan1)steer_seen=true;
@@ -170,8 +220,10 @@ extern "C" int run_tests() {
   CHECK(!wheel_nonzero && !steer_seen);
 #endif
   const uint32_t before=frame_count,old_abort=aborts;
+  can_abort_mask=0;
   test_now++;setRemote(2);peerFrame(peer,local,LifeState::Dead,false);robot.update();service.tick();
   CHECK(axis.getInput()==0 && !robot.output().control && aborts>old_abort);
+  CHECK(can_abort_mask==3); // 急停同时取消本地两条总线的旧邮箱。
   bool disabled=false;
   for(uint32_t i=before;i<frame_count;++i) {
     const auto &f=frames[i];if(f.id==1 && f.data[7]==0xFD)disabled=true;

@@ -17,7 +17,11 @@ struct Params {
 inline constexpr Params kControl{};
 // 两板安装矩阵仍需按第四项核对；这里只给出候选值，不把候选值当作已确认。
 inline constexpr bool kChassisImuConfirmed=true, kGimbalImuConfirmed=true;
-inline constexpr float kChassisRotation[9]={1,0,0,0,1,0,0,0,1};
-inline constexpr float kGimbalRotation[9]={1,0,0,0,1,0,0,0,1};
+// 底盘已按水平、车头抬高和左侧抬高实测确认：车体 X=传感器 X、Y=-传感器 Y、Z=-传感器 Z。
+// 该旋转同时用于加速度和角速度；云台安装矩阵仍单独核对，不能直接复制。
+inline constexpr float kChassisRotation[9]={1,0,0,0,-1,0,0,0,-1};
+// 云台按水平与枪口抬高实测录入：云台 X=传感器 Y、Y=传感器 X、Z=-传感器 Z。
+// 与底盘独立配置，同时变换加速度和角速度；更新后仍须实机复核 yaw 正方向。
+inline constexpr float kGimbalRotation[9]={0,1,0,1,0,0,0,0,-1};
 }
 #endif
