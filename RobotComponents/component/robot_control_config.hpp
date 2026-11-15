@@ -14,7 +14,12 @@ struct Params {
   float max_dt_s=0.003f;
   hello_world::pid::Pid::Params follow{.error_period=6.283185307179586f};
 };
-inline constexpr Params kControl{};
+// 已完成遥控通道、操作意图及拨杆映射确认；只登记映射，所有动力参数继续采用默认零值。
+inline constexpr Params kControl = [] {
+  Params params;
+  params.remote_mapping_confirmed = true;
+  return params;
+}();
 // 两板安装矩阵仍需按第四项核对；这里只给出候选值，不把候选值当作已确认。
 inline constexpr bool kChassisImuConfirmed=true, kGimbalImuConfirmed=true;
 // 底盘已按水平、车头抬高和左侧抬高实测确认：车体 X=传感器 X、Y=-传感器 Y、Z=-传感器 Z。

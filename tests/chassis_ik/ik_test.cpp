@@ -46,22 +46,40 @@ extern "C" int run_tests() {
     CHECK(near(wheel.speed_rad_s,1/radius) && near(wheel.steer_rad,0));
 
   // 文档旋转式独立核对 0、±90°、180°、整圈回绕以及任意方向的长度保持。
+  // 以现场左转为正的物理坐标为判据：朝左的云台前方必须是车体+y，不能再复现原式的反号。
   Solver::BodyMotion body;
   CHECK(Solver::gimbalToBody({1,0,2},pi/2,body));
-  CHECK(near(body.vx,0) && near(body.vy,-1) && body.w==2);
-  CHECK(Solver::gimbalToBody({1,0,0},-pi/2,body) && near(body.vy,1));
+  CHECK(near(body.vx,0) && near(body.vy,1) && body.w==2);
+  CHECK(Solver::gimbalToBody({1,0,0},-pi/2,body) && near(body.vy,-1));
   CHECK(Solver::gimbalToBody({1,0,0},pi,body) && near(body.vx,-1));
   CHECK(Solver::gimbalToBody({1,2,3},2*pi,body));
   CHECK(near(body.vx,1) && near(body.vy,2) && body.w==3);
   CHECK(Solver::gimbalToBody({0.4f,-0.7f,0},1.123f,body));
   CHECK(near(std::hypot(body.vx,body.vy),std::hypot(0.4f,0.7f)));
-  for(int i=0;i<4;++i)angles[i]=-pi/2;
+  for(int i=0;i<4;++i)angles[i]=pi/2;
   solver.reset();CHECK(solver.solve({1,0,0},pi/2,angles));
   for(const auto &wheel:solver.result().wheels)
-    CHECK(near(wheel.steer_rad,-pi/2) && near(wheel.speed_rad_s,1/radius));
+    CHECK(near(wheel.steer_rad,pi/2) && near(wheel.speed_rad_s,1/radius));
 
   // 纯旋转的四轮力臂和方向，以及平移+旋转的矢量合成。
   const float x[4]={0.167f,-0.167f,-0.167f,0.167f},y[4]={0.167f,0.167f,-0.167f,-0.167f};
+  // 用独立给出的物理方向案例重构四轮接地点速度，同时检查云台横移、左右偏转与自转叠加。
+  struct DirectionCase {float delta,vx,vy,expected_x,expected_y;};
+  const DirectionCase directions[]={
+      {0,1,0,1,0},{pi/2,1,0,0,1},{-pi/2,1,0,0,-1},
+      {pi,1,0,-1,0},{pi/2,0,1,-1,0},{-pi/2,0,1,1,0},
+      {pi/6,1,0,0.8660254f,0.5f},{-pi/6,1,0,0.8660254f,-0.5f}};
+  for(const auto &direction:directions) {
+    constexpr float spin=0.4f;
+    feedbackFor(direction.expected_x,direction.expected_y,spin,angles);
+    solver.reset();CHECK(solver.solve({direction.vx,direction.vy,spin},direction.delta,angles));
+    CHECK(solver.result().drive_aligned);
+    for(int i=0;i<4;++i) {
+      const auto &wheel=solver.result().wheels[i];
+      CHECK(near(wheel.speed_rad_s*radius*std::cos(wheel.steer_rad),direction.expected_x-spin*y[i]));
+      CHECK(near(wheel.speed_rad_s*radius*std::sin(wheel.steer_rad),direction.expected_y+spin*x[i]));
+    }
+  }
   feedbackFor(0,0,1,angles);solver.reset();CHECK(solver.solve({0,0,1},0,angles));
   for(int i=0;i<4;++i) {
     const auto &wheel=solver.result().wheels[i];

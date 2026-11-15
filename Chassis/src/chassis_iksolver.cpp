@@ -48,12 +48,14 @@ float ChassisIkSolver::wrapAngle(float angle_rad) {
 }
 
 // 使用任务书原式 R(-delta)：云台系指令转换为车体系，不能在未转换前叠加轮组力臂。
+// 上述为最初按任务书录入的历史说明；实测已确认delta为云台相对车体左转为正。
+// 现按x前/y左采用R(+delta)，使云台左偏时的前进请求映射到车体左侧，力臂仍在转换后叠加。
 bool ChassisIkSolver::gimbalToBody(const robot::ChassisMotion &command,float delta_rad,BodyMotion &body) {
   body={};
   if(!robot::isFinite(command) || !std::isfinite(delta_rad))return false;
   const float delta=wrapAngle(delta_rad),c=std::cos(delta),s=std::sin(delta);
-  body.vx=command.vx*c+command.vy*s;
-  body.vy=-command.vx*s+command.vy*c;
+  body.vx=command.vx*c-command.vy*s;
+  body.vy=command.vx*s+command.vy*c;
   body.w=command.w;
   if(!std::isfinite(body.vx) || !std::isfinite(body.vy)) {body={};return false;}
   return true;

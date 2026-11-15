@@ -12,8 +12,16 @@ extern "C" int run_tests() {
     auto *wm=GetMotorWheel(i);auto *sm=GetMotorSteer(i);
     if(w.configured)CHECK(wm!=nullptr && wm->motor_info().id==w.id && wm->getInput()==0);
     else CHECK(wm==nullptr);
-    if(s.configured)CHECK(sm!=nullptr && sm->motor_info().id==s.id && sm->getInput()==0);
+    if(s.configured)CHECK(sm!=nullptr && sm->motor_info().id==s.id && sm->getInput()==0 && sm->get_input_type()==InputType::kCurr);
     else CHECK(sm==nullptr);
+    // 使用实际工厂和提供驱动验证0.05A的编码比例、方向及共享帧隔离，不连接实物。
+    if(sm!=nullptr) {
+      uint8_t encoded[8]{};CHECK(sm->setInput(0.05f)==Status::kOk && sm->encode(encoded));
+      const int slot=(s.id-1)*2;const int raw=(encoded[slot]<<8)|encoded[slot+1];
+      CHECK((raw>=32768?raw-65536:raw)==(s.reversed?-273:273));
+      for(int b=0;b<8;++b)if(b!=slot && b!=slot+1)CHECK(encoded[b]==0);
+      CHECK(GM6020::GetTxId(s.id,InputType::kCurr)==0x1FE && sm->setInput(0)==Status::kOk);
+    }
   }
   auto *base=GetMotorYaw();CHECK(base!=nullptr && base==GetMotorYaw());
   const auto &cfg=vehicle_config::kYaw;

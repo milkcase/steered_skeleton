@@ -1,4 +1,5 @@
 #include "robot_supervisor.hpp"
+#include "robot_control_config.hpp"
 #include "motor_feedback.hpp"
 #include "control_clock.hpp"
 #include "test_support.hpp"
@@ -29,6 +30,16 @@ void enterWorking(Supervisor &s,ControlInput &in) {
 extern "C" int run_tests() {
   Supervisor defaults(Board::Gimbal,Params{});auto in=input();
   CHECK(!defaults.configured() && defaults.update(in).state.life==LifeState::Dead);
+  // 生产映射确认后仍使用零动力配置；即使其他条件有效且请求运行，也不能产生使能或控制。
+  {
+    Supervisor production(Board::Gimbal,kControl);auto confirmed=input();
+    CHECK(kControl.remote_mapping_confirmed && !production.configured());
+    confirmed.remote.arm=false;confirmed.remote.run=true;
+    confirmed.peer_state.life=LifeState::Working;
+    const auto &output=production.update(confirmed);
+    CHECK(output.state.life==LifeState::Dead && !output.control && output.axis_action==AxisAction::Disable);
+    CHECK(output.motion.vx==0 && output.motion.vy==0 && output.motion.w==0);
+  }
   Supervisor g(Board::Gimbal,parameters());CHECK(g.configured());
   in.remote.arm=false;in.remote.run=true;
   CHECK(!g.update(in).control && g.output().axis_action==AxisAction::Disable && !g.output().command_valid);
@@ -72,6 +83,15 @@ extern "C" int run_tests() {
   in.remote.mode=ChassisMode::Follow;in.peer_state.chassis_mode=ChassisMode::Follow;
   CHECK(!c.update(in).control);in.now_ms++;in.axis_angle=0.3f;
   CHECK(c.update(in).control && c.output().motion.w>0.29f && c.output().motion.w<0.31f);
+  // 云台右偏时底盘应向右跟随；与已有左偏向左的检查共同约束跟随正负号，参数仅用于模拟。
+  {
+    Supervisor right_follow(Board::Chassis,parameters());ControlInput right_input;
+    enterWorking(right_follow,right_input);
+    right_input.remote.mode=ChassisMode::Follow;right_input.peer_state.chassis_mode=ChassisMode::Follow;
+    right_follow.update(right_input);right_input.now_ms++;right_input.axis_angle=-0.3f;
+    CHECK(right_follow.update(right_input).control);
+    CHECK(right_follow.output().motion.w< -0.29f && right_follow.output().motion.w> -0.31f);
+  }
   in.remote.mode=ChassisMode::Spin;in.peer_state.chassis_mode=ChassisMode::Spin;c.update(in);in.now_ms++;in.remote.motion.w=-0.6f;
   CHECK(c.update(in).control && c.output().motion.w==-0.6f);
   in.remote.motion.w=0;CHECK(c.update(in).motion.w==0); // 小陀螺不硬编码常转速度。

@@ -23,9 +23,11 @@ bool SendBoardCommunication() {
     auto *comm=GetGimbalChassisComm();
     if(comm==nullptr)return false;
     comm->encode(frame);header.StdId=comm->txId();
+    header.IDE=CAN_ID_STD;header.RTR=CAN_RTR_DATA;header.DLC=8;
+    if(HAL_CAN_AddTxMessage(&hcan2,&header,frame,&mailbox)==HAL_OK)return true;
+    // encode已推进页号，但本页未排队成功；放弃残包，下一次必须从新快照第一页重新开始。
+    comm->restartTx();return false;
   }
-  header.IDE=CAN_ID_STD;header.RTR=CAN_RTR_DATA;header.DLC=8;
-  return HAL_CAN_AddTxMessage(&hcan2,&header,frame,&mailbox)==HAL_OK;
 }
 
 // 复制完整的新鲜状态，允许读取未 Working 状态，避免两板等待对方先 Working 的死锁。

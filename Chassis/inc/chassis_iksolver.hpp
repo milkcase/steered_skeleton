@@ -36,6 +36,7 @@ class ChassisIkSolver {
   // 清空历史舵角与结果；恢复时从新反馈重新起步，不能沿用故障前的目标。
   void reset();
   // 输入云台系速度、文档定义的 delta、四个有效舵角反馈及周期，生成目标而不发送。
+  // 现场已确认delta使用底盘本板yaw关节角：枪口朝车头为0，从上往下看左转为正。
   bool solve(const robot::ChassisMotion &command, float delta_rad,
              const float current_steer_rad[4], float dt_s = 0.001f);
   // 返回最近结果的只读引用；只有 valid=true 时才可将其作为闭环目标。
@@ -45,6 +46,7 @@ class ChassisIkSolver {
   // 查询配置是否通过数值检查；合法零上限仍然是停用状态。
   bool configured() const { return configured_; }
   // 按考核说明 3.2 原式旋转云台系平移量，角速度保持不变；非法输入输出零并失败。
+  // 上条为历史说明；当前以已确认的左转正角采用R(+delta)，修正原式与x前/y左定义的冲突。
   static bool gimbalToBody(const robot::ChassisMotion &command, float delta_rad, BodyMotion &body);
   // 将有限角度归一化到 [-π,π)，用于最短差；非有限输入返回 NaN，由调用方拒绝。
   static float wrapAngle(float angle_rad);

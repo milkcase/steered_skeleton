@@ -44,7 +44,8 @@ def run(name,sources,includes,defines=()):
     uc.mem_map(0x10000,0x90000);uc.mem_write(0x10000,binary.read_bytes())
     uc.mem_map(0x20000000,0x20000)
     uc.reg_write(UC_ARM_REG_SP,0x2001fff0);uc.reg_write(UC_ARM_REG_LR,0x90001)
-    uc.emu_start(entry|1,0x90000,count=100_000_000)
+    # 预算覆盖整段多秒回归及新增锁存/通道复制，不是一次控制周期；实际3ms/500ms/IWDG门槛未改。
+    uc.emu_start(entry|1,0x90000,count=200_000_000)
     if uc.reg_read(UC_ARM_REG_PC)!=0x90000:
         raise SystemExit(f'{name}: 测试未返回')
     return uc.reg_read(UC_ARM_REG_R0)
@@ -54,6 +55,16 @@ result=run('supervisor',['tests/robot/supervisor_test.cpp'],
 if result:
     raise SystemExit(f'supervisor_test.cpp 第 {result} 行失败')
 print('三态、急停/离线/恢复门控、三模式和反馈有效期：PASS')
+result=run('debug-preview',['tests/robot/debug_preview_test.cpp','RobotComponents/component/gimbal_chassis_comm.cpp'],
+           ['tests/robot','RobotComponents/component','Chassis/inc'])
+if result:
+    raise SystemExit(f'debug_preview_test.cpp 第 {result} 行失败')
+print('零输出预演、回中握手、500ms锁止、异常撤销及协议隔离：PASS')
+result=run('debug-power',['tests/robot/debug_power_test.cpp','RobotComponents/component/gimbal_chassis_comm.cpp'],
+           ['tests/robot','RobotComponents/component','Chassis/inc'])
+if result:
+    raise SystemExit(f'debug_power_test.cpp 第 {result} 行失败')
+print('受限动力双板会话、Working红线、500ms截止和运动边界：PASS')
 for board in ('Chassis','Gimbal'):
     includes=['tests/robot',f'{board}/inc',f'{board}/Core/Inc',
               f'{board}/Drivers/STM32F4xx_HAL_Driver/Inc',f'{board}/Drivers/CMSIS/Include',
@@ -73,6 +84,16 @@ for board in ('Chassis','Gimbal'):
     if result:
         raise SystemExit(f'{board}: runtime_test.cpp 第 {result} 行失败')
     print(f'{board} 真实 Runtime/PID/电机编码、任务分发及归零发送：PASS')
+    result=run(f'{board}-preview-runtime',runtime_sources,runtime_includes,
+               runtime_defines+['ROBOT_MOTOR_DEBUG_PREVIEW_ENABLED=1'])
+    if result:
+        raise SystemExit(f'{board}: 零输出预演 runtime_test.cpp 第 {result} 行失败')
+    print(f'{board} 零输出预演真实链路、全部电机帧和使能隔离：PASS')
+    result=run(f'{board}-power-runtime',runtime_sources,runtime_includes,
+               runtime_defines+['ROBOT_MOTOR_DEBUG_POWER_ENABLED=1'])
+    if result:
+        raise SystemExit(f'{board}: 受限动力 power_runtime_case.hpp/runtime_test.cpp 第 {result} 行失败')
+    print(f'{board} 受限动力真实发送：仅ID1、Working、限幅及急停最终重查：PASS')
     result=run(f'{board}-driver',['tests/robot/driver_test.cpp',f'{board}/src/motor_DaMiao.cpp',
                                  f'{board}/src/motor_base.cpp'],includes,
                ['STM32F407xx','USE_HAL_DRIVER','STM32_HAL_FILENAME="stm32f4xx_hal.h"'])

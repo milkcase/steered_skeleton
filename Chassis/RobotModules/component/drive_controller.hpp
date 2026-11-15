@@ -23,13 +23,14 @@ class DriveController : public DrivePort {
           !robot_control::MotorFeedbacks().fresh(i,now) || !robot_control::MotorFeedbacks().fresh(i+4,now) ||
           !std::isfinite(wheels_[i]->vel()) || !std::isfinite(steers_[i]->angle()) ||
           wheels_[i]->get_input_type()!=hello_world::motor::InputType::kRaw ||
-          steers_[i]->get_input_type()!=hello_world::motor::InputType::kRaw ||
+          steers_[i]->get_input_type()!=hello_world::motor::InputType::kCurr ||
           !pidReady(wp_[i],wheels_[i]->motor_info().raw_input_lim,0) ||
-          !pidReady(sp_[i],steers_[i]->motor_info().raw_input_lim,6.283185307179586f))return false;
+          !pidReady(sp_[i],steers_[i]->motor_info().curr_input_lim,6.283185307179586f))return false;
     }
     return true;
   }
   // 使用第六项逆解得到轮轴 rad/s 和舵角 rad，再运行独立速度/位置 PID，输出原始报文单位。
+  // 当前舵电机为电流模式，舵PID输出和限幅单位是A；驱动轮PID仍为原始报文单位。
   bool update(const ChassisMotion &command,float delta,const ModuleState &state,float dt) override {
     if(!ready(hello_world::tick::GetTickMs())) {stop();return false;}
     float angles[4],speeds[4];

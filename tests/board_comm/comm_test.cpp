@@ -229,6 +229,28 @@ extern "C" int run_tests() {
   injected_header.IDE=CAN_ID_STD;injected_header.RTR=CAN_RTR_REMOTE;receiveComm();CHECK(!ReadPeerBoard(peer_data));
   injected_header.RTR=CAN_RTR_DATA;injected_header.StdId=0x333;receiveComm();CHECK(!ReadPeerBoard(peer_data));
   injected_header.StdId=GetGimbalChassisComm()->rxId();receiveComm(true);CHECK(!ReadPeerBoard(peer_data));
-  send_result=HAL_ERROR;CHECK(!SendBoardCommunication());
+  // 中间页入邮箱失败后不能直接发尾页；下一次成功发送必须重启新快照第一页。
+  do {CHECK(SendBoardCommunication());} while((sent_data[0]&15)!=0);
+  send_result=HAL_ERROR;CHECK(!SendBoardCommunication());CHECK((sent_data[0]&15)==1);
+  send_result=HAL_OK;CHECK(SendBoardCommunication());CHECK((sent_data[0]&15)==0);
+  // 模拟已编码的中间页被本地邮箱撤销；重启后必须有新序号，接收方无需容忍乱序。
+  const uint8_t before_restart=sent_data[1];CHECK(SendBoardCommunication());CHECK((sent_data[0]&15)==1);
+  GetGimbalChassisComm()->restartTx();CHECK(SendBoardCommunication());
+  CHECK((sent_data[0]&15)==0 && static_cast<uint8_t>(sent_data[1]-before_restart)==1);
+  // 接收方继续严格拒绝缺页，并将最初错误锁存；后续尾页不能把它覆盖。
+  test_now=1000;
+  Comm event_tx(Comm::CodePart::Chassis,0x210,0x211),event_rx(Comm::CodePart::Gimbal,0x211,0x210);
+  activateC(event_tx);pages(event_tx,frame);deliver(event_rx,frame);CHECK(event_rx.commandsUsable());
+  pages(event_tx,frame);event_rx.decode(frame[0]);event_rx.decode(frame[2]);
+  const auto missing=event_rx.rxDiagnostics().last_rejection;
+  CHECK(missing.reason==Comm::RxFailure::Order && missing.page==2 && missing.expected_page==1);
+  CHECK(missing.seq==missing.expected_seq && !event_rx.commandsUsable());
+  ++test_now;event_rx.decode(frame[1]);
+  CHECK(event_rx.rxDiagnostics().last_rejection.time_ms==missing.time_ms);
+  pages(event_tx,frame);deliver(event_rx,frame);CHECK(event_rx.commandsUsable());
+  event_tx.chassis_data().flags.imu_ready=false;pages(event_tx,frame);event_rx.decode(frame[0]);
+  const auto withdrew=event_rx.rxDiagnostics().last_rejection;
+  CHECK(withdrew.reason==Comm::RxFailure::SafetyPage && withdrew.page==0 && (withdrew.flags_byte&2)==0);
+  CHECK(!event_rx.commandsUsable());
   return 0;
 }

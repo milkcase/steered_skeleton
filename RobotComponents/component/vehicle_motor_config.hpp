@@ -55,10 +55,11 @@ inline constexpr MotorConfig kWheels[4] = {
     {Board::Chassis, CanBus::Can2, Model::M3508, 4, false, 0.0f, true},
 };
 inline constexpr MotorConfig kSteers[4] = {
-    {Board::Chassis, CanBus::Can1, Model::GM6020, 1, true, 2.61346f, true},
-    {Board::Chassis, CanBus::Can1, Model::GM6020, 2, true, -2.06844f, true},
-    {Board::Chassis, CanBus::Can1, Model::GM6020, 3, true, 0.00729f, true},
-    {Board::Chassis, CanBus::Can1, Model::GM6020, 4, true, 1.58518f, true},
+    // 按本次实测的机械朝前姿态修正零偏；方向不变，烧录后仍需在同一标记处复测。
+    {Board::Chassis, CanBus::Can1, Model::GM6020, 1, true, 2.59546f, true},
+    {Board::Chassis, CanBus::Can1, Model::GM6020, 2, true, -2.02444f, true},
+    {Board::Chassis, CanBus::Can1, Model::GM6020, 3, true, -0.04371f, true},
+    {Board::Chassis, CanBus::Can1, Model::GM6020, 4, true, 1.54418f, true},
 };
 
 // 以用户确认的实车接线为准：yaw、pitch 与驱动轮共用两板相连的 CAN2。
@@ -67,9 +68,11 @@ inline constexpr MotorConfig kSteers[4] = {
 // configured=true 只允许创建零输入实例；不启用电机，不代表实物已验证。
 // 最新更正覆盖上方共线旧说明：yaw/驱动在灰色总线，pitch 在云台 CAN2 蓝色独立总线。
 inline constexpr MotorConfig kYaw{
-    Board::Chassis, CanBus::Can2, Model::DM_J4310, 1, false, 1.60879f, true};
+    // 机械朝前原读数约3.047rad，将此姿态移为0；保留左转为正及单圈回绕。
+    Board::Chassis, CanBus::Can2, Model::DM_J4310, 1, false, -1.6273953f, true};
 inline constexpr MotorConfig kPitch{
-    Board::Gimbal, CanBus::Can2, Model::DM_J4310, 2, true, 2.91772f, true};
+    // 采用水平时 angle_=+0.012 的实测基准；零偏增加0.012，软件限位同步减去0.012。
+    Board::Gimbal, CanBus::Can2, Model::DM_J4310, 2, true, 2.92972f, true};
 }  // namespace vehicle_config
 
 #endif

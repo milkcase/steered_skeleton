@@ -26,6 +26,7 @@ void InitializeRobotRuntime() {
   robot->registerCommunication(GetGimbalChassisComm());
   robot->registerAxis(static_cast<hello_world::motor::DaMiao *>(GetMotorYaw()),GetGimbal(),GetPidMotorYaw());
   robot->registerDrive(GetDriveController());
+  robot->registerDebugTarget(GetMotorSteer(0));
   hello_world::motor::Motor *wheels[4],*steers[4];
   for(int i=0;i<4;++i) {wheels[i]=GetMotorWheel(i);steers[i]=GetMotorSteer(i);}
   CanService().registerDrive(wheels,steers);

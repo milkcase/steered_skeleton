@@ -113,6 +113,30 @@ extern "C" int run_tests() {
   Gimbal disabled(Gimbal::Axis::Yaw,&motor,&pid,gimbal_control_config::kYaw);
   CHECK(!disabled.update({0.1f,0},state,safety) && motor.input==0);
 
+  // 使用本次实车限位配置验证：静态范围已确认仍不能绕过零动力上限。
+  params=gimbal_control_config::kPitch;
+  pitch_motor.position=0;
+  Gimbal field_pitch(Gimbal::Axis::Pitch,&pitch_motor,&pitch_pid,params);
+  CHECK(field_pitch.configured() && params.pitch_limits_confirmed);
+  CHECK(!field_pitch.update({0,0.1f},state,safety) && pitch_motor.input==0);
+  // 仅在模拟器副本中给出非零上限，核对选定边界的钳位、向外归零与越界拒绝控制。
+  params.max_torque_nm=3;params.max_target_rate_rad_s=1000;
+  CHECK(field_pitch.configure(params));
+  CHECK(field_pitch.update({0,2},state,safety));
+  CHECK(near(field_pitch.result().target_rad,0.515f) && field_pitch.result().limited);
+  field_pitch.stop();CHECK(field_pitch.update({0,-2},state,safety));
+  CHECK(near(field_pitch.result().target_rad,-0.419f));
+  pitch_motor.position=0.51f;field_pitch.stop();
+  CHECK(field_pitch.update({0,2},state,safety) && pitch_motor.input==0);
+  CHECK(field_pitch.update({0,0},state,safety) && pitch_motor.input<0);
+  pitch_motor.position=-0.414f;field_pitch.stop();
+  CHECK(field_pitch.update({0,-2},state,safety) && pitch_motor.input==0);
+  CHECK(field_pitch.update({0,0},state,safety) && pitch_motor.input>0);
+  pitch_motor.position=0.516f;
+  CHECK(!field_pitch.update({0,0},state,safety) && pitch_motor.input==0);
+  pitch_motor.position=-0.420f;
+  CHECK(!field_pitch.update({0,0},state,safety) && pitch_motor.input==0);
+
   // 状态模式切换清积分；正常连续调用则保持本回路自己的积分历史。
   configurePid(pid,true,0,1);yaw.configure(limits());
   for(int i=0;i<10;++i)CHECK(yaw.update({0.3f,0},state,safety));

@@ -60,7 +60,7 @@ class Supervisor {
     out_.emergency_released=in.remote.valid && in.remote.released;
     const bool valid_mode=in.remote.mode==robot::ChassisMode::Separate ||
         in.remote.mode==robot::ChassisMode::Follow || in.remote.mode==robot::ChassisMode::Spin;
-    if(!out_.ready || !in.remote.valid || !in.remote.released || !valid_mode ||
+    if(in.peer_flags.debug_preview || !out_.ready || !in.remote.valid || !in.remote.released || !valid_mode ||
         !std::isfinite(in.dt_s) || in.dt_s<=0 || in.dt_s>params_.max_dt_s ||
         !in.peer_valid || !in.peer_flags.ready || !in.peer_flags.imu_ready ||
         !in.peer_flags.remote_valid || !in.peer_flags.emergency_released || in.peer_flags.fault ||

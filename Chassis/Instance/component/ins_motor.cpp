@@ -89,6 +89,8 @@ hello_world::motor::Motor *GetMotorSteer(int idx) {
     opt.dir = cfg.reversed ? hello_world::motor::kDirRev : hello_world::motor::kDirFwd;
     opt.angle_offset = cfg.offset_rad;
     // GM6020 使用默认电压输入，舵角统一归一化到 [-π, π)。
+    // 现场已确认四台均为电流控制，覆盖早期电压说明；setInput单位改为A，零偏和方向不变。
+    opt.input_type = hello_world::motor::InputType::kCurr;
     opt.angle_range = hello_world::motor::AngleRange::kNegPiToPosPi;
     motors[idx].init(cfg.id, opt);
     motors[idx].setInput(0.0f);

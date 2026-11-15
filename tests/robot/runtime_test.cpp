@@ -24,8 +24,9 @@ bool remote_valid=true;
 GimbalChassisComm *local_comm=nullptr;
 int init_calls=0,comm_calls=0,main_calls=0;
 bool order_ok=true;
-struct Frame {CAN_HandleTypeDef *can;uint32_t id;uint8_t data[8];};
+struct Frame {CAN_HandleTypeDef *can;uint32_t id;uint8_t data[8];LifeState life=LifeState::Dead;};
 Frame frames[4096];
+RobotRuntime *frame_owner=nullptr;
 // 提供可控时间源，所有生产有效期逻辑仍使用真实无符号差值。
 uint32_t hello_world::tick::GetTickMs() {return test_now;}
 // 提供 HAL 毫秒接口，真实 DBUS 临界区不调用外设。
@@ -41,7 +42,7 @@ HAL_CAN_StateTypeDef HAL_CAN_GetState(const CAN_HandleTypeDef *can) {
 uint32_t HAL_CAN_GetTxMailboxesFreeLevel(const CAN_HandleTypeDef *) {return free_mailboxes;}
 // 记录实际序列化帧，保留总线和 ID，不操作 CAN 适配器。
 HAL_StatusTypeDef HAL_CAN_AddTxMessage(CAN_HandleTypeDef *can,const CAN_TxHeaderTypeDef *h,const uint8_t *p,uint32_t *) {
-  if(frame_count<4096) {auto &f=frames[frame_count++];f.can=can;f.id=h->StdId;memcpy(f.data,p,8);}
+  if(frame_count<4096) {auto &f=frames[frame_count++];f.can=can;f.id=h->StdId;memcpy(f.data,p,8);if(frame_owner)f.life=frame_owner->output().state.life;}
   return HAL_OK;
 }
 // 记录撤销旧邮箱动作，模拟硬件取消待发命令。
@@ -93,8 +94,8 @@ extern "C" void CommTaskInit() {++comm_calls;}
 extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *);
 
 // 构造明确的拨杆与五通道 DBUS 字节，再交给提供的 DT7 解码器。
-void setRemote(uint8_t right,uint16_t pitch=1024) {
-  uint16_t c[5]={1024,pitch,1024,1024,1024};uint8_t d[18]{};
+void setRemote(uint8_t right,uint16_t pitch=1024,uint16_t steer=1024) {
+  uint16_t c[5]={1024,pitch,steer,1024,1024};uint8_t d[18]{};
   d[0]=c[0];d[1]=(c[0]>>8)|(c[1]<<3);d[2]=(c[1]>>5)|(c[2]<<6);
   d[3]=c[2]>>2;d[4]=(c[2]>>10)|(c[3]<<1);d[5]=(c[3]>>7)|(right<<4)|(1<<6);
   d[16]=c[4];d[17]=c[4]>>8;remote.decode(d);
@@ -118,10 +119,11 @@ void peerFrame(GimbalChassisComm &peer,GimbalChassisComm &local,LifeState life,b
   for(int i=0;i<3;++i) {uint8_t data[8];peer.encode(data);local.decode(data);}
 }
 // 注入真实达妙状态反馈，记录本地接收时间；不把使能发送等同于已经使能。
-void axisFeedback(DaMiao &axis) {
-  uint8_t f[8]={static_cast<uint8_t>(0x10|axis.motor_info().id),0x80,0,0x80,0,0,30,30};
+void axisFeedback(DaMiao &axis,bool enabled=true) {
+  uint8_t f[8]={static_cast<uint8_t>((enabled?0x10:0)|axis.motor_info().id),0x80,0,0x80,0,0,30,30};
   axis.decode(f);MotorFeedbacks().recordAxis(axis.motor_info().id,f,test_now);
 }
+#include "power_runtime_case.hpp"
 // 验证真实 Runtime、PID、驱动序列化、任务分发及失效后的零帧/失能帧。
 extern "C" int run_tests() {
   MainTaskInit();CHECK(init_calls==1 && comm_calls==1);
@@ -157,11 +159,13 @@ extern "C" int run_tests() {
   Chassis::Solver solver(limits);Chassis chassis(&solver);
   Motor *wp[4],*sp[4];hello_world::pid::Pid wpid[4],spid[4];hello_world::pid::Pid *wpp[4],*spp[4];
   for(int i=0;i<4;++i) {
+    OptionalParams current;current.input_type=InputType::kCurr;steers[i].init(i+1,current);
     wp[i]=&wheels[i];sp[i]=&steers[i];wpp[i]=&wpid[i];spp[i]=&spid[i];
     wpid[i].configure({.kp=10,.output_limit=100});
-    spid[i].configure({.kp=10,.output_limit=100,.error_period=6.283185307179586f});
+    spid[i].configure({.kp=0.1f,.output_limit=0.05f,.error_period=6.283185307179586f});
   }
   DriveController drive(&chassis,wp,sp,wpp,spp,&solver);robot.registerDrive(&drive);
+  robot.registerDebugTarget(&steers[0]);
   RobotCanService service(&robot,true);service.registerDrive(wp,sp);
 #else
   RobotCanService service(&robot,false);
@@ -181,6 +185,76 @@ extern "C" int run_tests() {
   CHECK(motor_notification==CAN_IT_RX_FIFO1_MSG_PENDING);
 #endif
   robot.setTransportReady(true);setRemote(3);
+#if ROBOT_MOTOR_DEBUG_POWER_ENABLED
+  frame_owner=&robot;
+#if defined(TEST_CHASSIS)
+  return runPowerRuntime(robot,service,axis,peer,wp,sp);
+#else
+  return runPowerRuntime(robot,service,axis,peer,nullptr,nullptr);
+#endif
+#endif
+#if ROBOT_MOTOR_DEBUG_PREVIEW_ENABLED
+  // 用真实Runtime和驱动验证零输出预演：即便模拟PID参数非零、输入有残留，也不得输出动力。
+  for(int step=0;step<1000;++step) {
+    test_now=step;robot.pollSensors();axisFeedback(axis);axis.setInput(0.5f);
+    const uint8_t right=step<=10?2:(step<=230?3:1);
+    const float stick=step>=240?-0.5f:0;
+    setRemote(right,1024,stick==0?1024:694);
+#if defined(TEST_CHASSIS)
+    uint8_t raw[8]{};raw[6]=30;
+    for(int i=0;i<4;++i) {
+      wheels[i].decode(raw);steers[i].decode(raw);wheels[i].setInput(100);steers[i].setInput(100);
+      MotorFeedbacks().recordDji(i,raw,test_now);MotorFeedbacks().recordDji(i+4,raw,test_now);
+    }
+    auto &preview_peer=peer.gimbal_data();preview_peer={};
+    preview_peer.flags.debug_preview=preview_peer.flags.remote_valid=preview_peer.flags.imu_ready=true;
+    preview_peer.flags.pitch_feedback_valid=true;preview_peer.flags.emergency_released=right!=2;
+    preview_peer.preview={stick,right,1,stick==0,true,true};
+#else
+    auto &preview_peer=peer.chassis_data();preview_peer={};
+    preview_peer.flags.debug_preview=preview_peer.flags.imu_ready=preview_peer.flags.yaw_feedback_valid=true;
+#endif
+    // 与真实任务一致，每3ms只收一页；每个1ms控制周期都读取，覆盖拼包间隙。
+    if(step%3==0) {uint8_t data[8];peer.encode(data);local.decode(data);}
+    robot.update();service.tick();
+    CHECK(!robot.output().control && robot.output().axis_action==AxisAction::Disable && axis.getInput()==0);
+    CHECK(robot_motor_debug_diagnostics.final_input==0 && robot_motor_debug_diagnostics.zero_output_only==1);
+#if defined(TEST_CHASSIS)
+    for(int i=0;i<4;++i)CHECK(wheels[i].getInput()==0 && steers[i].getInput()==0);
+    if(step==300)CHECK(robot_motor_debug_diagnostics.stage==robot_debug::Stage::Previewing);
+#endif
+    if(step>=20)CHECK(robot_motor_debug_diagnostics.peer==1 && robot_motor_debug_diagnostics.remote==1);
+  }
+#if defined(TEST_CHASSIS)
+  CHECK(robot_motor_debug_diagnostics.run_count==1 && robot_motor_debug_diagnostics.stop_count==1);
+  CHECK(robot_motor_debug_diagnostics.last_stop==robot_debug::Reason::TimeLimit);
+#else
+  CHECK(robot_motor_debug_diagnostics.stage==robot_debug::Stage::Observer && robot_motor_debug_diagnostics.actual_valid==0);
+#endif
+  // 诊断镜像即使被破坏也不能授予动力；最终发送层仍将真实电机残留输入清零。
+  robot_motor_debug_diagnostics.final_input=1000;robot_motor_debug_diagnostics.zero_output_only=0;
+  axis.setInput(1);service.tick();CHECK(axis.getInput()==0);
+  bool got_disable=false;
+  for(uint32_t i=0;i<frame_count;++i) {
+    const auto &frame=frames[i];
+    if(frame.id==1) {
+      CHECK(frame.can==&hcan2 && frame.data[7]==0xFD);got_disable=true;
+    }
+    if(frame.id==M3508::GetTxId(1) || frame.id==GM6020::GetTxId(1,InputType::kCurr))
+      for(uint8_t byte:frame.data)CHECK(byte==0);
+  }
+  CHECK(got_disable);
+  // 对端退回普通固件或旧标记时，不能继续沿用上轮预演许可。
+#if defined(TEST_CHASSIS)
+  peer.gimbal_data().flags.debug_preview=false;
+#else
+  peer.chassis_data().flags.debug_preview=false;
+#endif
+  ++test_now;robot.pollSensors();axisFeedback(axis);
+  for(int page=0;page<6;++page) {uint8_t data[8];peer.encode(data);local.decode(data);}
+  robot.update();service.tick();CHECK(robot_motor_debug_diagnostics.reason==robot_debug::Reason::Peer);
+  return 0;
+#endif
   for(int step=0;step<240;++step) {
     test_now=step;robot.pollSensors();
     const bool work=step>=210;
@@ -210,7 +284,7 @@ extern "C" int run_tests() {
 #endif
     if(f.id==1 && f.data[0]==255 && f.data[7]==0xFC)enabled=true;
     if(f.id==1 && f.data[0]!=255)CHECK((f.data[3]&15)==0 && f.data[4]==0 && f.data[5]==0 && (f.data[6]&0xF0)==0);
-    if(f.id==GM6020::GetTxId(1,InputType::kRaw) && f.can==&hcan1)steer_seen=true;
+    if(f.id==GM6020::GetTxId(1,InputType::kCurr) && f.can==&hcan1)steer_seen=true;
     if(f.id==M3508::GetTxId(1) && f.can==&hcan2 && f.data[1]!=0 && f.data[3]!=0 && f.data[5]!=0 && f.data[7]!=0)wheel_nonzero=true;
   }
   CHECK(enabled);
@@ -227,7 +301,7 @@ extern "C" int run_tests() {
   bool disabled=false;
   for(uint32_t i=before;i<frame_count;++i) {
     const auto &f=frames[i];if(f.id==1 && f.data[7]==0xFD)disabled=true;
-    if(f.id==M3508::GetTxId(1) || f.id==GM6020::GetTxId(1,InputType::kRaw))for(uint8_t byte:f.data)CHECK(byte==0);
+    if(f.id==M3508::GetTxId(1) || f.id==GM6020::GetTxId(1,InputType::kCurr))for(uint8_t byte:f.data)CHECK(byte==0);
   }
   CHECK(disabled);
 #if defined(TEST_CHASSIS)

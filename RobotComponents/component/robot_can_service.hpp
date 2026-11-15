@@ -37,8 +37,13 @@ class RobotCanService {
   void tick() {
     remote_input::InterruptLock lock;
     if(robot_==nullptr)return;
+    if(robot_->debugPowerEnabled()) {tickDebugPower();return;}
     auto action=robot_->output().axis_action;
     bool control=robot_->output().control;
+    // 零输出预演的编译期硬隔离：不读取可被Watch修改的诊断字段来决定是否允许动力。
+    if(robot_->debugPreviewEnabled()) {
+      robot_->forceZeroForPreview();control=false;action=robot_control::AxisAction::Disable;
+    }
     const uint32_t now=hello_world::tick::GetTickMs();
     if(!have_tx_clock_) {last_steer_ms_=last_wheel_ms_=last_axis_ms_=now;have_tx_clock_=true;}
     if(control && ((chassis_ && (now-last_steer_ms_>=20 || now-last_wheel_ms_>=20)) || now-last_axis_ms_>=20)) {
@@ -61,11 +66,41 @@ class RobotCanService {
     cycle_=(cycle_+1)%60;
   }
  private:
+  // 独立动力调试发送路径：只有左前转向ID1可非零，必须Working及最新私有会话许可同时成立。
+  void tickDebugPower() {
+    robot_->forceZeroForPreview();
+    if(HAL_CAN_GetState(&hcan1)!=HAL_CAN_STATE_LISTENING || HAL_CAN_GetState(&hcan2)!=HAL_CAN_STATE_LISTENING) {
+      robot_->stopDebugPower(robot_debug::Reason::Transport);robot_->setTransportReady(false);
+    }
+    const uint32_t now=hello_world::tick::GetTickMs();
+    if(!have_tx_clock_) {last_steer_ms_=last_wheel_ms_=last_axis_ms_=now;have_tx_clock_=true;}
+    bool active=chassis_ && robot_->output().control && robot_->output().state.life==LifeState::Working;
+    if(active && now-last_steer_ms_>=20) {
+      robot_->stopDebugPower(robot_debug::Reason::Transmit);active=false;
+    }
+    uint8_t target[8]{};
+    if(active && (steers_[0]==nullptr || steers_[0]!=robot_->debugTarget() || steers_[0]->motor_info().id!=1)) {
+      robot_->stopDebugPower(robot_debug::Reason::Configuration);active=false;
+    }
+    if(active)active=robot_->fillDebugSteerFrame(target);
+    const bool changed=!have_power_state_ || (was_power_active_ && !active);
+    if(changed)abortOld();
+    have_power_state_=true;was_power_active_=active;
+    // 停止后的首帧立即归零；稳态仍周期发送零帧，绝不以“不发包”代替停车。
+    if(chassis_ && (active || changed || cycle_%20==0)) {
+      send(&hcan1,hello_world::motor::GM6020::GetTxId(1,hello_world::motor::InputType::kCurr),target);
+    }
+    if(chassis_ && (changed || cycle_%4==0))sendGroup(&hcan2,wheels_,false);
+    if(changed || cycle_%4==1)sendAxis(robot_control::AxisAction::Disable);
+    if(cycle_%3==2)SendBoardCommunication();
+    cycle_=(cycle_+1)%60;
+  }
   // 丢弃未发送完的旧命令；只在首次或从活动转保护时调用，不不断撤销新的零帧。
   void abortOld() {
     // 两板现均使用两个本地控制器：必须同时撤销板间帧和本板电机的旧邮箱。
     HAL_CAN_AbortTxRequest(&hcan1,CAN_TX_MAILBOX0|CAN_TX_MAILBOX1|CAN_TX_MAILBOX2);
     HAL_CAN_AbortTxRequest(&hcan2,CAN_TX_MAILBOX0|CAN_TX_MAILBOX1|CAN_TX_MAILBOX2);
+    robot_->restartCommunicationTx();
   }
   // 非阻塞排队；邮箱忙等待下一周期，HAL 真正报错则撤销本板许可并归零。
   bool send(CAN_HandleTypeDef *can,uint32_t id,uint8_t data[8]) {
@@ -74,18 +109,20 @@ class RobotCanService {
     uint32_t mailbox=0;
     if(HAL_CAN_AddTxMessage(can,&header,data,&mailbox)==HAL_OK) {
       const uint32_t now=hello_world::tick::GetTickMs();
-      if(can==&hcan1 && id==hello_world::motor::GM6020::GetTxId(1,hello_world::motor::InputType::kRaw))last_steer_ms_=now;
+      if(can==&hcan1 && id==hello_world::motor::GM6020::GetTxId(1,hello_world::motor::InputType::kCurr))last_steer_ms_=now;
       else if(can==&hcan2 && id==hello_world::motor::M3508::GetTxId(1))last_wheel_ms_=now;
       else if(id<16)last_axis_ms_=now;
       return true;
     }
+    if(robot_->debugPowerEnabled())robot_->stopDebugPower(robot_debug::Reason::Transmit);
     robot_->setTransportReady(false);abortOld();return false;
   }
   // ID1..4 的各电机仅改自己两字节，合并后只发一次 0x200；保护时不使用残留编码。
   // 协议复核修正：CAN1 GM6020 的 kRaw 为 0x1FF，CAN2 M3508 为 0x200，实际 ID 以驱动 API 为准。
+  // 最新实物确认四台GM6020为电流模式：现用kCurr/0x1FE，保护零帧也用同一电流帧；驱动轮不变。
   void sendGroup(CAN_HandleTypeDef *can,hello_world::motor::Motor *const motors[4],bool control) {
     uint8_t data[8]{};
-    if(control && robot_->controlStillSafe()) {
+    if(control && !robot_->debugPreviewEnabled() && robot_->controlStillSafe()) {
       for(int i=0;i<4;++i) {
         if(motors[i]==nullptr || motors[i]->motor_info().id<1 || motors[i]->motor_info().id>4 ||
             !std::isfinite(motors[i]->getInput()) || !motors[i]->encode(data)) {
@@ -94,18 +131,20 @@ class RobotCanService {
       }
     }
     const uint32_t id=can==&hcan1?
-        hello_world::motor::GM6020::GetTxId(1,hello_world::motor::InputType::kRaw):
+        hello_world::motor::GM6020::GetTxId(1,hello_world::motor::InputType::kCurr):
         hello_world::motor::M3508::GetTxId(1);
     send(can,id,data);
   }
   // 只发送明确的使能/失能命令；恢复使能受遥控、自检和 Supervisor 的时间窗口约束。
   void axisCommand(uint8_t command) {
+    if((robot_->debugPreviewEnabled() || robot_->debugPowerEnabled()) && command!=0xFD)return;
     auto *axis=robot_->axis();if(axis==nullptr)return;
     uint8_t data[8];for(auto &b:data)b=0xFF;data[7]=command;
     send(&hcan2,axis->motor_info().id,data);
   }
   // 使用提供的 MIT 编码器，但拒绝隐含清错、保存零位、寄存器写入和非零刚度。
   void sendAxis(robot_control::AxisAction action) {
+    if(robot_->debugPreviewEnabled() || robot_->debugPowerEnabled())action=robot_control::AxisAction::Disable;
     auto *axis=robot_->axis();if(axis==nullptr)return;
     const uint32_t now=hello_world::tick::GetTickMs();
     if(action==robot_control::AxisAction::Disable) {axis->setInput(0);axisCommand(0xFD);return;}
@@ -130,6 +169,7 @@ class RobotCanService {
   }
   RobotRuntime *robot_;bool chassis_=false,have_state_=false,was_active_=false,was_control_=false,enable_sent_=false;
   bool have_tx_clock_=false;
+  bool have_power_state_=false,was_power_active_=false;
   uint32_t last_steer_ms_=0,last_wheel_ms_=0,last_axis_ms_=0;
   uint32_t cycle_=0,last_enable_ms_=0;
   hello_world::motor::Motor *wheels_[4]{},*steers_[4]{};
