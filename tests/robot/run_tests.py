@@ -65,6 +65,27 @@ result=run('debug-power',['tests/robot/debug_power_test.cpp','RobotComponents/co
 if result:
     raise SystemExit(f'debug_power_test.cpp 第 {result} 行失败')
 print('受限动力双板会话、Working红线、500ms截止和运动边界：PASS')
+# 只改变本轮两个公开旋钮，验证更高一档配置同样限流、配置编号匹配且保留所有停止行为。
+alternate_tuning=['ROBOT_MOTOR_DEBUG_KP=6.0f','ROBOT_MOTOR_DEBUG_CURRENT_LIMIT_A=0.100f']
+result=run('debug-power-adjusted',['tests/robot/debug_power_test.cpp','RobotComponents/component/gimbal_chassis_comm.cpp'],
+           ['tests/robot','RobotComponents/component','Chassis/inc'],alternate_tuning)
+if result:
+    raise SystemExit(f'可调参数debug_power_test.cpp 第 {result} 行失败')
+print('P=6/限流0.100A、配置编号唯一及不同参数拒绝：PASS')
+result=run('debug-power-low-gain',['tests/robot/debug_power_test.cpp','RobotComponents/component/gimbal_chassis_comm.cpp'],
+           ['tests/robot','RobotComponents/component','Chassis/inc'],
+           ['ROBOT_MOTOR_DEBUG_KP=0.5f','ROBOT_MOTOR_DEBUG_CURRENT_LIMIT_A=0.200f'])
+if result:
+    raise SystemExit(f'低P/最高电流档debug_power_test.cpp 第 {result} 行失败')
+print('P=0.5/限流0.200A、实际指令低于上限及原截止保护：PASS')
+# 非法值必须在编译阶段直接失败，不能默默截断或移除硬边界后继续构建。
+for define in ('ROBOT_MOTOR_DEBUG_KP=0.6f','ROBOT_MOTOR_DEBUG_CURRENT_LIMIT_A=0.300f'):
+    rejected=subprocess.run([compiler,'-std=gnu++20','-fsyntax-only','-x','c++','-I',str(repo/'RobotComponents/component'),
+                             '-D'+define,'-'],input='#include "motor_debug_tuning.hpp"\n',text=True,
+                            encoding='utf-8',errors='replace',capture_output=True)
+    if rejected.returncode==0 or 'static assertion failed' not in rejected.stderr:
+        raise SystemExit('非法调试参数未按预期由编译检查拒绝：'+define)
+print('非档位P/超出硬上限电流的编译拒绝：PASS')
 for board in ('Chassis','Gimbal'):
     includes=['tests/robot',f'{board}/inc',f'{board}/Core/Inc',
               f'{board}/Drivers/STM32F4xx_HAL_Driver/Inc',f'{board}/Drivers/CMSIS/Include',
@@ -94,6 +115,12 @@ for board in ('Chassis','Gimbal'):
     if result:
         raise SystemExit(f'{board}: 受限动力 power_runtime_case.hpp/runtime_test.cpp 第 {result} 行失败')
     print(f'{board} 受限动力真实发送：仅ID1、Working、限幅及急停最终重查：PASS')
+    if board=='Chassis':
+        result=run(f'{board}-adjusted-power-runtime',runtime_sources,runtime_includes,
+                   runtime_defines+['ROBOT_MOTOR_DEBUG_POWER_ENABLED=1']+alternate_tuning)
+        if result:
+            raise SystemExit(f'{board}: 可调电流真实发送第 {result} 行失败')
+        print('Chassis 可调档位真实编码/限流、独立反馈电流与停止保护：PASS')
     result=run(f'{board}-driver',['tests/robot/driver_test.cpp',f'{board}/src/motor_DaMiao.cpp',
                                  f'{board}/src/motor_base.cpp'],includes,
                ['STM32F407xx','USE_HAL_DRIVER','STM32_HAL_FILENAME="stm32f4xx_hal.h"'])

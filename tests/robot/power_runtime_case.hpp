@@ -64,7 +64,7 @@ int runPowerRuntime(RobotRuntime &robot,RobotCanService &service,DaMiao &axis,Gi
     CHECK(axis.getInput()==0 && !axis.is_enabled());
 #if defined(TEST_CHASSIS)
     for(int i=0;i<4;++i)CHECK(wheels[i]->getInput()==0 && (i==0 || steers[i]->getInput()==0));
-    CHECK(std::fabs(steers[0]->getInput())<=0.05f);
+    CHECK(std::fabs(steers[0]->getInput())<=robot_debug::tuning::kCurrentLimitA);
     if(steers[0]->getInput()!=0) {
       saw_nonzero=true;CHECK(robot.output().state.life==LifeState::Working && robot.output().control);
       // 模拟的毫秒已在advance末尾推进；恰好到500ms时，看门狗复查应立即停止而非延长一轮。
@@ -80,7 +80,12 @@ int runPowerRuntime(RobotRuntime &robot,RobotCanService &service,DaMiao &axis,Gi
 #if defined(TEST_CHASSIS)
   CHECK(saw_nonzero && robot_motor_debug_diagnostics.run_count==1);
   CHECK(robot_motor_debug_diagnostics.last_stop==robot_debug::Reason::TimeLimit);
-  CHECK(std::fabs(robot_motor_debug_diagnostics.recorded_peak_output-0.05f)<0.000001f);
+  CHECK(robot_motor_debug_diagnostics.recorded_peak_output>0 && robot_motor_debug_diagnostics.recorded_peak_output<=robot_debug::tuning::kCurrentLimitA);
+  if(robot_debug::tuning::kPositionKp>=5.0f && robot_debug::tuning::kCurrentLimitA<=0.100f)
+    CHECK(std::fabs(robot_motor_debug_diagnostics.recorded_peak_output-robot_debug::tuning::kCurrentLimitA)<0.000001f);
+  CHECK(robot_motor_debug_diagnostics.configured_kp==robot_debug::tuning::kPositionKp);
+  CHECK(robot_motor_debug_diagnostics.configured_current_limit_a==robot_debug::tuning::kCurrentLimitA);
+  CHECK(robot_motor_debug_diagnostics.configured_profile==robot_debug::tuning::kProfile);
   CHECK(std::fabs(robot_motor_debug_diagnostics.recorded_peak_feedback_current_a-164.0f*3.0f/16384.0f)<0.000001f);
   CHECK(robot_motor_debug_diagnostics.recorded_feedback_samples>400);
 #endif
@@ -92,7 +97,7 @@ int runPowerRuntime(RobotRuntime &robot,RobotCanService &service,DaMiao &axis,Gi
     if(f.id==GM6020::GetTxId(1,InputType::kCurr)) {
       CHECK(f.can==&hcan1);for(int slot=2;slot<8;++slot)CHECK(f.data[slot]==0);
       const int raw=(f.data[0]<<8)|f.data[1];const int signed_raw=raw>=32768?raw-65536:raw;
-      CHECK(signed_raw>=-273 && signed_raw<=273);
+      CHECK(signed_raw>=-robot_debug::tuning::kRawCurrentLimit && signed_raw<=robot_debug::tuning::kRawCurrentLimit);
       if(signed_raw!=0)CHECK(f.life==LifeState::Working && signed_raw<0);
     }
   }
@@ -105,7 +110,7 @@ int runPowerRuntime(RobotRuntime &robot,RobotCanService &service,DaMiao &axis,Gi
   CHECK(robot.output().control);
   robot_motor_debug_diagnostics.final_input=25000;robot_motor_debug_diagnostics.session_token=0;
   steers[0]->setInput(1.0f);steers[1]->setInput(1.0f);service.tick();
-  CHECK(std::fabs(steers[0]->getInput())<=0.05f && steers[1]->getInput()==0);
+  CHECK(std::fabs(steers[0]->getInput())<=robot_debug::tuning::kCurrentLimitA && steers[1]->getInput()==0);
   auto &urgent=peer.gimbal_data();urgent.preview.right=2;urgent.preview.steer=0;urgent.preview.neutral=true;
   urgent.flags.emergency_released=false;urgent.flags.command_valid=false;urgent.state={};urgent.session.phase=0;
   // 只推进到新急停快照的第一页，刻意不补齐后两页，验证撤销不等待完整提交。

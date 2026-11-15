@@ -21,6 +21,7 @@
 
 #include "tick.hpp"
 #include "module_state.hpp"
+#include "motor_debug_tuning.hpp"
 
 /* Exported macro ------------------------------------------------------------*/
 namespace robot {
@@ -35,8 +36,8 @@ class GimbalChassisComm {
 
   static constexpr uint32_t kChassisTxId=0x210, kGimbalTxId=0x211;
   static constexpr uint32_t kOfflineMs=100, kAssemblyMs=10;
-  // 版本2为初始电流位置环；版本3为P=5、仍限流50mA，拒绝旧配置给新参数授权。
-  static constexpr uint16_t kPowerProfile=3;
+  // 旧固定版本1～3不再使用；当前编号由可调P和电流档位唯一生成，混烧不同参数不能授权。
+  static constexpr uint16_t kPowerProfile=robot_debug::tuning::kProfile;
   enum class RxFailure : uint32_t {None,Crc,Header,SafetyPage,Order,Assembly,Payload};
   // 保存首次撤销完整快照时的页和安全字节；之后的连带缺页不覆盖，直到重新收齐有效快照。
   struct RxEvent {

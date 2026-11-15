@@ -6,7 +6,7 @@ uint32_t test_ms=0;
 // 模拟两板各自的毫秒接口，测试只在ARM模拟器运行。
 uint32_t hello_world::tick::GetTickMs() {return test_ms;}
 // 明确的首轮测试参数，与生产独立动力配置相同，不写入普通固件。
-PowerConfig config() {return {5.0f,0.05f,0.0872664626f,0.5f};}
+PowerConfig config() {return {tuning::kPositionKp,tuning::kCurrentLimitA,0.0872664626f,0.5f};}
 // 提供本地已验证条件；对端条件和会话仍必须通过真实协议收取。
 Input local(uint8_t right,float stick) {
   Input in;in.now_ms=test_ms;in.transport=in.imu=in.feedback=in.remote=true;
@@ -54,18 +54,29 @@ struct Bench {
 extern "C" int run_tests() {
   Power disabled(false,true);CHECK(!disabled.configured());
   Power bad(true,true,PowerConfig{});CHECK(!bad.configured());
+  auto mismatched=config();mismatched.kp+=0.5f;Power wrong_config(true,true,mismatched);CHECK(!wrong_config.configured());
+  // 128种可调组合必须编号唯一、装入现有一个字节；非法档位不生成有效编号。
+  bool seen_profiles[256]{};
+  for(uint32_t p=1;p<=16;++p)for(uint32_t c=1;c<=8;++c) {
+    const auto profile=tuning::profileFor(p,c);CHECK(profile>=128 && profile<=255 && !seen_profiles[profile]);seen_profiles[profile]=true;
+  }
+  CHECK(tuning::profileFor(0,1)==0 && tuning::profileFor(1,9)==0);
+  CHECK(tuning::stepIndex(0.6f,0.5f,16)==0 && tuning::stepIndex(0.3f,0.025f,8)==0);
   Bench b;bool moving=false;float peak=0;
   for(int ms=0;ms<1100;++ms) {
     const uint8_t right=ms<60?2:(ms<360?3:1);const float stick=ms>=400?-0.5f:0;
     b.tick(right,stick);
-    CHECK(std::fabs(b.chassis.command())<=0.05f && b.gimbal.command()==0);
+    CHECK(std::fabs(b.chassis.command())<=tuning::kCurrentLimitA && b.gimbal.command()==0);
     if(b.chassis.command()!=0) {
       CHECK(b.chassis.output().state.life==robot::LifeState::Working && b.chassis.output().control);
       CHECK(b.chassis.session().token==b.gs.token && b.gs.phase==2 && b.gs.target==1 && b.gs.profile==Comm::kPowerProfile);
       moving=true;if(b.chassis.command()>peak)peak=b.chassis.command();
     }
   }
-  CHECK(moving && std::fabs(peak-0.05f)<0.000001f && b.chassis.command()==0);
+  CHECK(moving && peak>0 && peak<=tuning::kCurrentLimitA && b.chassis.command()==0);
+  // 低P/高限流组合本来就可能到不了上限；只在已知本脉冲可饱和的范围检查确实达到限流。
+  if(tuning::kPositionKp>=5.0f && tuning::kCurrentLimitA<=0.100f)
+    CHECK(std::fabs(peak-tuning::kCurrentLimitA)<0.000001f);
   CHECK(std::fabs(b.chassis.diagnostics().recorded_peak_feedback_current_a-0.012f)<0.000001f);
   CHECK(b.chassis.diagnostics().recorded_feedback_samples>400);
   CHECK(b.chassis.diagnostics().run_count==1 && b.chassis.diagnostics().stop_count==1);
@@ -83,6 +94,8 @@ extern "C" int run_tests() {
   invalid=b.gs;invalid.target=2;CHECK(!b.chassis.stillSafe(b.ci,invalid));
   invalid=b.gs;invalid.profile=1;CHECK(!b.chassis.stillSafe(b.ci,invalid)); // 旧电压配置不得用于本次电流输出。
   invalid=b.gs;invalid.profile=2;CHECK(!b.chassis.stillSafe(b.ci,invalid)); // 旧P=0.5电流版也不能授权新P参数。
+  invalid=b.gs;invalid.profile=3;CHECK(!b.chassis.stillSafe(b.ci,invalid));
+  invalid=b.gs;invalid.profile^=8;CHECK(!b.chassis.stillSafe(b.ci,invalid)); // 另一个P档位也必须拒绝。
   auto late=b.ci;late.now_ms=b.chassis.diagnostics().started_ms+500;
   CHECK(!b.chassis.stillSafe(late,b.gs));
   auto bad_sample=b.ci;bad_sample.steer=0;CHECK(!b.chassis.stillSafe(bad_sample,b.gs));

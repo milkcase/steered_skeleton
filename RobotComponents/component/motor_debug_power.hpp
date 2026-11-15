@@ -11,8 +11,8 @@ struct PowerConfig {
 };
 // 只有独立动力构建选用这组首轮参数；普通/预演构建保留零值，未改整车PID配置。
 inline constexpr PowerConfig kPowerConfig = [] {
-  // 下一档只提高位置环P，使已有50mA上限可实际到达；不提高电流、时限或运动范围。
-  if(kPowerEnabled)return PowerConfig{5.0f,0.05f,0.0872664626f,0.5f};
+  // 两个调试旋钮仅在独立动力构建生效；硬边界和双板唯一配置编号由同一头文件校验。
+  if(kPowerEnabled)return PowerConfig{tuning::kPositionKp,tuning::kCurrentLimitA,0.0872664626f,0.5f};
   return PowerConfig{};
 }();
 
@@ -28,8 +28,9 @@ class Power {
   }
   // 检查本轮不可通过Watch放宽的上限；未填或非法参数不允许建立动力许可。
   bool configured() const {
-    return enabled_ && std::isfinite(config_.kp) && config_.kp>0 && config_.kp<=5.0f &&
-        std::isfinite(config_.current_limit_a) && config_.current_limit_a>0 && config_.current_limit_a<=0.05f &&
+    return enabled_ && std::isfinite(config_.kp) && config_.kp>0 && config_.kp<=tuning::kHardMaxKp &&
+        config_.kp==tuning::kPositionKp && config_.current_limit_a==tuning::kCurrentLimitA &&
+        std::isfinite(config_.current_limit_a) && config_.current_limit_a>0 && config_.current_limit_a<=tuning::kHardMaxCurrentA &&
         std::isfinite(config_.max_offset_rad) && config_.max_offset_rad>0 && config_.max_offset_rad<=0.087267f &&
         std::isfinite(config_.max_speed_rad_s) && config_.max_speed_rad_s>0 && config_.max_speed_rad_s<=0.5f && pid_.configured();
   }
@@ -159,6 +160,7 @@ class Power {
     d.feedback_current_valid=last_input_.feedback_current_valid;
     d.feedback_current_a=last_input_.feedback_current_valid?last_input_.feedback_current_a:0;
     d.recorded_peak_feedback_current_a=recorded_feedback_peak_;d.recorded_feedback_samples=recorded_feedback_samples_;
+    d.configured_kp=config_.kp;d.configured_current_limit_a=config_.current_limit_a;d.configured_profile=robot::GimbalChassisComm::kPowerProfile;
     d.right=last_input_.right;d.left=last_input_.left;d.stick=last_input_.steer;
     if(out_.state.life==robot::LifeState::Working)d.stage=Stage::PowerRunning;
     return d;

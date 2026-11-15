@@ -204,7 +204,7 @@ class RobotRuntime {
     const float value=debug_power_.command();
     if(debug_target_==nullptr || debug_target_->motor_info().id!=1 ||
         debug_target_->get_input_type()!=hello_world::motor::InputType::kCurr ||
-        !std::isfinite(value) || std::fabs(value)>0.05f ||
+        !std::isfinite(value) || std::fabs(value)>robot_debug::tuning::kCurrentLimitA ||
         debug_target_->setInput(value)!=hello_world::motor::Status::kOk || !debug_target_->encode(data)) {
       stopDebugPower(robot_debug::Reason::Configuration);for(int i=0;i<8;++i)data[i]=0;return false;
     }
@@ -213,7 +213,8 @@ class RobotRuntime {
     }
     const int encoded=(data[0]<<8)|data[1];const int signed_raw=encoded>=32768?encoded-65536:encoded;
     // 电流协议±16384对应±3A；0.05A向零量化最多273，不能沿用原电压原始输入上限。
-    if(signed_raw>273 || signed_raw< -273) {
+    // 可调版按编译时同一档电流计算最终整数上限，仍与私有控制器限流独立复查。
+    if(signed_raw>robot_debug::tuning::kRawCurrentLimit || signed_raw< -robot_debug::tuning::kRawCurrentLimit) {
       stopDebugPower(robot_debug::Reason::Configuration);for(int i=0;i<8;++i)data[i]=0;return false;
     }
     return true;
@@ -284,7 +285,7 @@ class RobotRuntime {
             debug_target_->get_input_type()==hello_world::motor::InputType::kCurr;
         for(int i=0;i<9;++i)sample.feedback=robot_control::MotorFeedbacks().fresh(i,input.now_ms) && sample.feedback;
         if(robot_debug::kPowerEnabled && debug_target_!=nullptr)
-          sample.feedback=sample.feedback && debug_target_->motor_info().curr_input_lim>=0.05f;
+          sample.feedback=sample.feedback && debug_target_->motor_info().curr_input_lim>=robot_debug::tuning::kCurrentLimitA;
         if(debug_target_!=nullptr) {
           sample.angle=debug_target_->angle();sample.velocity=debug_target_->vel();
           // 使用提供驱动从反馈帧解码的curr()，绝不由setInput或命令反推实际电流。

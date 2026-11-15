@@ -84,6 +84,8 @@ struct Diagnostics {
   StopCheck stop_check{};
   uint32_t feedback_current_valid=0,recorded_feedback_samples=0;
   float feedback_current_a=0,recorded_peak_feedback_current_a=0;
+  uint32_t configured_profile=0;
+  float configured_kp=0,configured_current_limit_a=0;
 };
 
 // 纯内存的左前转向预演器：只计算目标，不持有电机或CAN指针，也不计算可发送的动力。
@@ -218,6 +220,8 @@ inline void publish(const Diagnostics &source) {
   out.feedback_current_valid=source.feedback_current_valid;out.feedback_current_a=source.feedback_current_a;
   out.recorded_feedback_samples=source.recorded_feedback_samples;
   out.recorded_peak_feedback_current_a=source.recorded_peak_feedback_current_a;
+  out.configured_profile=source.configured_profile;out.configured_kp=source.configured_kp;
+  out.configured_current_limit_a=source.configured_current_limit_a;
   out.stop_check.count=source.stop_check.count;out.stop_check.run_count=source.stop_check.run_count;
   out.stop_check.time_ms=source.stop_check.time_ms;out.stop_check.source=source.stop_check.source;
   out.stop_check.mask=source.stop_check.mask;out.stop_check.control_age_ms=source.stop_check.control_age_ms;

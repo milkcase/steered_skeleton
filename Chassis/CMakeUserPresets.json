@@ -1,0 +1,23 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "MotorDebugPower",
+            "displayName": "左前转向受限动力调试",
+            "description": "显式启用受限动力，独立输出；P和电流在motor_debug_tuning.hpp修改，普通Debug仍关闭动力",
+            "inherits": "Debug",
+            "binaryDir": "${sourceDir}/build/MotorDebugPower",
+            "cacheVariables": {
+                "CMAKE_CXX_FLAGS_DEBUG": "-g -DROBOT_MOTOR_DEBUG_POWER_ENABLED=1",
+                "CMAKE_PROJECT_INCLUDE": "${sourceDir}/../tests/robot/debug_preview_output.cmake"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "MotorDebugPower",
+            "configurePreset": "MotorDebugPower",
+            "jobs": 6
+        }
+    ]
+}
