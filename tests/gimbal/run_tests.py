@@ -26,7 +26,7 @@ if not compiler or not objcopy:
 elf=output/'gimbal.elf'
 binary=elf.with_suffix('.bin')
 command=[compiler,'-mcpu=cortex-m4','-mthumb','-mfloat-abi=soft','-std=gnu++20',
-         '-O1','-fno-exceptions','-fno-rtti','-fno-threadsafe-statics','-fno-builtin',
+         '-DROBOT_NORMAL_MAIN_ENABLED=0','-O1','-fno-exceptions','-fno-rtti','-fno-threadsafe-statics','-fno-builtin',
          '-ffunction-sections','-fdata-sections','-nostdlib','-Wl,-e,run_tests',
          '-Wl,-Ttext=0x10000','-Wl,-Tdata=0x30000','-Wl,--section-start=.bss=0x40000',
          '-Wl,--gc-sections']

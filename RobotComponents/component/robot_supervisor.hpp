@@ -36,9 +36,12 @@ class Supervisor {
  public:
   // 保存板角色、参数并创建独立跟随 PID；默认参数保持停用。
   Supervisor(Board board,const Params &params) : board_(board),params_(params),follow_(params.follow) {}
+  // 仅在外层确认急停后更换整组遥控映射，清除旧准备许可、目标与跟随积分。
+  bool configure(const Params &params) {stop();params_=params;follow_.configure(params.follow);return configured();}
   // 检查三种模式共同需要的遥控范围，不能拿合法零参数当成可运行参数。
   bool configured() const {
     return params_.remote_mapping_confirmed && positive(params_.max_vx_m_s) && positive(params_.max_vy_m_s) &&
+        std::isfinite(params_.aim_acceleration_rad_s2) && params_.aim_acceleration_rad_s2>=0 &&
         positive(params_.max_w_rad_s) && params_.max_w_rad_s<=32.767f &&
         params_.max_vx_m_s<=32.767f && params_.max_vy_m_s<=32.767f &&
         positive(params_.yaw_rate_rad_s) && positive(params_.pitch_rate_rad_s) &&
@@ -50,7 +53,7 @@ class Supervisor {
         std::fabs(params_.follow.error_period-2*kPi)<0.00001f;
   }
   // 最外层安全出口，清除所有历史；恢复必须重新右中回中，不能带着原指令直接回 Working。
-  void stop() {out_={};armed_=false;holding_=false;seeded_=false;follow_.reset();}
+  void stop() {out_={};armed_=false;holding_=false;seeded_=false;follow_.reset();yaw_rate_state_=pitch_rate_state_=0;}
   // 按急停/就绪、恢复、Working 的顺序生成当前周期决策，不在恢复阶段生成回中运动。
   const ControlOutput &update(const ControlInput &in) {
     const auto previous=out_.state;
@@ -58,8 +61,8 @@ class Supervisor {
     out_.ready=configured() && in.local_ready && in.imu_ready;
     out_.remote_valid=in.remote.valid;
     out_.emergency_released=in.remote.valid && in.remote.released;
-    const bool valid_mode=in.remote.mode==robot::ChassisMode::Separate ||
-        in.remote.mode==robot::ChassisMode::Follow || in.remote.mode==robot::ChassisMode::Spin;
+    const bool valid_mode=(!params_.separate_only || in.remote.mode==robot::ChassisMode::Separate) && (in.remote.mode==robot::ChassisMode::Separate ||
+        in.remote.mode==robot::ChassisMode::Follow || in.remote.mode==robot::ChassisMode::Spin);
     if(in.peer_flags.debug_preview || !out_.ready || !in.remote.valid || !in.remote.released || !valid_mode ||
         !std::isfinite(in.dt_s) || in.dt_s<=0 || in.dt_s>params_.max_dt_s ||
         !in.peer_valid || !in.peer_flags.ready || !in.peer_flags.imu_ready ||
@@ -131,9 +134,16 @@ class Supervisor {
         stop();return out_;
       }
       // 以本次恢复的相对航向建立保持目标，底盘转动时扣除其 IMU yaw；不假设两板绝对航向相同。
-      if(!seeded_) {world_yaw_=wrap(in.peer_feedback.yaw+in.peer_chassis_yaw);pitch_=in.axis_angle;seeded_=true;}
-      world_yaw_=wrap(world_yaw_+in.remote.yaw_rate*in.dt_s);
-      pitch_+=in.remote.pitch_rate*in.dt_s;
+      if(!seeded_) {world_yaw_=wrap(in.peer_feedback.yaw+in.peer_chassis_yaw);pitch_=params_.start_level_pitch?0:in.axis_angle;seeded_=true;}
+      // 偏杆限加速度；回中冻结角度目标，位置/速度双环仍持续保持。
+      auto rate=[&](float request,float &previous) {
+        if(request==0 || params_.aim_acceleration_rad_s2<=0)previous=request;
+        else {const float step=params_.aim_acceleration_rad_s2*in.dt_s,change=request-previous;
+          previous+=change>step?step:(change< -step?-step:change);}
+        return previous;
+      };
+      world_yaw_=wrap(world_yaw_+rate(in.remote.yaw_rate,yaw_rate_state_)*in.dt_s);
+      pitch_+=rate(in.remote.pitch_rate,pitch_rate_state_)*in.dt_s;
       out_.target={wrap(world_yaw_-in.peer_chassis_yaw),pitch_};
     } else {
       out_.target.yaw=wrap(in.peer_yaw_target);
@@ -156,7 +166,8 @@ class Supervisor {
   // 判断动力参数为有限正数。
   static bool positive(float value) {return std::isfinite(value) && value>0;}
   // 复位恢复许可、目标和 PID；保留本周期本地就绪诊断，故障许可不带到下周期。
-  void resetHistory() {armed_=false;holding_=false;arm_failed_=false;seeded_=false;follow_.reset();}
+  void resetHistory() {armed_=false;holding_=false;arm_failed_=false;seeded_=false;follow_.reset();yaw_rate_state_=pitch_rate_state_=0;}
+  float yaw_rate_state_=0,pitch_rate_state_=0;
   static constexpr float kPi=3.141592653589793f;
   Board board_;Params params_;hello_world::pid::Pid follow_;
   ControlOutput out_{};

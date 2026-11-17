@@ -2,6 +2,16 @@
     "version": 3,
     "configurePresets": [
         {
+            "name": "Main",
+            "displayName": "默认主程序：分离模式全轮组与云台",
+            "inherits": "Debug",
+            "binaryDir": "${sourceDir}/build",
+            "cacheVariables": {
+                "CMAKE_CXX_FLAGS_DEBUG": "-g -Og",
+                "CMAKE_PROJECT_INCLUDE": "${sourceDir}/../tests/robot/debug_preview_output.cmake"
+            }
+        },
+        {
             "name": "VectorDrive",
             "displayName": "二维舵轮解算：四转向+仅左前驱动",
             "description": "左杆幅度给车速、方向经坐标逆解；四舵连续投影，仅左前M3508输出",
@@ -57,6 +67,11 @@
         }
     ],
     "buildPresets": [
+        {
+            "name": "Main",
+            "configurePreset": "Main",
+            "jobs": 6
+        },
         {
             "name": "VectorDrive",
             "configurePreset": "VectorDrive",

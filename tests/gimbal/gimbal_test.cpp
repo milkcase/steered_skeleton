@@ -166,5 +166,11 @@ extern "C" int run_tests() {
     }
     CHECK(near(plant.position,goal,0.003f));CHECK(peak<goal+0.01f);
   }
+  // 独立超速依据真实反馈；即使位置目标很小也立即归零，保护门槛不能等于目标速度上限。
+  configurePid(pid,true);params=limits();params.actual_speed_limit_rad_s=4;
+  CHECK(yaw.configure(params));motor.position=0;motor.velocity=4.01f;
+  CHECK(!yaw.update({0.01f,0},state,safety) && motor.input==0);
+  motor.velocity=3.9f;CHECK(yaw.update({0.01f,0},state,safety) && motor.input<0);
+  params.actual_speed_limit_rad_s=params.max_speed_rad_s;CHECK(!yaw.configure(params));
   return 0;
 }

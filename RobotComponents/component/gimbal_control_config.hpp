@@ -3,20 +3,29 @@
 #include "gimbal_controller.hpp"
 #include "pid_config.hpp"
 namespace gimbal_control_config {
-// 两轴力矩及目标变化率默认零；PID 参数仍由第三项 pid_config.hpp 单独维护。
+// 两轴限制统一从robot_tuning.hpp读取；本文件只换算为rad/s和模块参数。
 inline constexpr robot::Gimbal::Params kYaw=[] {
-  robot::Gimbal::Params p;p.speed_pid=pid_config::kYawSpeed;return p;
+  robot::Gimbal::Params p;p.speed_pid=pid_config::kYawSpeed;
+  if(main_tuning::enabled) {p.max_torque_nm=ROBOT_YAW_TORQUE_NM;p.max_target_rate_rad_s=ROBOT_YAW_TARGET_RATE_RPM*main_tuning::rpm;
+    p.max_speed_rad_s=pid_config::kYaw.output_limit;p.max_dt_s=0.003f;p.actual_speed_limit_rad_s=ROBOT_YAW_TRIP_RPM*main_tuning::rpm;}
+  return p;
 }();
-// 考核说明未给 pitch 安全范围，确认前 false，不能用电机编码量程 ±π 代替机械限位。
-// 将用户确认的静态安全区间换算到本次水平零位；仅确认范围，不放行力矩或目标变化率。
+// pitch使用已现场确认的软件安全区；机械行程不能由电机编码量程±π推断。
 inline constexpr robot::Gimbal::Params kPitch = [] {
   robot::Gimbal::Params params;
   params.speed_pid=pid_config::kPitchSpeed;
-  params.pitch_limits_confirmed = true;
-  params.pitch_min_rad = -0.419f;
-  params.pitch_max_rad = 0.515f;
-  // 其余默认值保留：力矩和目标变化率均为0，边界保护区为0.03rad。
+  params.pitch_limits_confirmed = true;params.pitch_guard_rad=ROBOT_PITCH_GUARD_RAD;
+  params.pitch_min_rad = ROBOT_PITCH_MIN_RAD;
+  params.pitch_max_rad = ROBOT_PITCH_MAX_RAD;
+  if(main_tuning::enabled) {params.max_torque_nm=ROBOT_PITCH_TORQUE_NM;
+    params.max_target_rate_rad_s=ROBOT_PITCH_TARGET_RATE_RPM*main_tuning::rpm;
+    params.max_speed_rad_s=pid_config::kPitch.output_limit;params.max_dt_s=0.003f;
+    params.actual_speed_limit_rad_s=ROBOT_PITCH_TRIP_RPM*main_tuning::rpm;}
+  // 历史回归关闭Main时保持零动力；云台主程序最终使用底盘下发的整组参数。
   return params;
 }();
+// Main两轴始终启用独立超速保护；填0不能绕过保护，旧零动力回归不受此断言影响。
+static_assert(!main_tuning::enabled || (kYaw.actual_speed_limit_rad_s>kYaw.max_speed_rad_s &&
+  kPitch.actual_speed_limit_rad_s>kPitch.max_speed_rad_s),"云台实际超速保护必须严格高于位置环输出速度上限");
 }
 #endif

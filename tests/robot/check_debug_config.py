@@ -28,7 +28,7 @@ extern "C" const uint32_t identity[] __attribute__((used,section(".authorization
     with tempfile.TemporaryDirectory(dir=output) as folder:
         folder = Path(folder)
         obj, binary = folder/'config.o', folder/'config.bin'
-        subprocess.run([compiler, '-std=gnu++20', '-mcpu=cortex-m4', '-mthumb', '-c', '-x', 'c++',
+        subprocess.run([compiler, '-DROBOT_NORMAL_MAIN_ENABLED=0', '-std=gnu++20', '-mcpu=cortex-m4', '-mthumb', '-c', '-x', 'c++',
                         '-I', str(root/'RobotComponents/component'), *['-D'+item for item in definitions],
                         '-', '-o', str(obj)], input=source, text=True, encoding='utf-8', check=True)
         subprocess.run([objcopy, '--dump-section', f'.authorization_test={binary}', str(obj)], check=True)
@@ -80,7 +80,7 @@ static_assert(robot_debug::direction::kSpeedKd-ROBOT_STEER_SPEED_KD<0.000001f &&
 '''
     for definitions, accepted in cases:
         result = subprocess.run(
-            [compiler, '-std=gnu++20', '-fsyntax-only', '-x', 'c++', '-I', str(root / 'RobotComponents/component'),
+            [compiler, '-DROBOT_NORMAL_MAIN_ENABLED=0', '-std=gnu++20', '-fsyntax-only', '-x', 'c++', '-I', str(root / 'RobotComponents/component'),
              *['-D' + definition for definition in definitions], '-'],
             input=source, text=True, encoding='utf-8', errors='replace', capture_output=True)
         if (result.returncode == 0) != accepted:

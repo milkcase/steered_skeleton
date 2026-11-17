@@ -20,6 +20,7 @@ class Gimbal {
     float max_dt_s=0.010f;
     float max_speed_rad_s=0.0f;         // 外环输出上限，单位rad/s；不能用力矩上限替代。
     hello_world::pid::Pid::Params speed_pid{}; // 内环以电机速度反馈计算力矩(Nm)，默认停用。
+    float actual_speed_limit_rad_s=0; // 非零时按真实反馈独立超速停机；追加字段保留旧聚合初始化顺序。
   };
   struct Safety {
     bool remote_valid=false;       // 有效且未过期的 DBUS/板间遥控输入。
@@ -52,6 +53,8 @@ class Gimbal {
         std::isfinite(params.pitch_guard_rad) && params.pitch_guard_rad>=0 &&
         std::isfinite(params.max_dt_s) && params.max_dt_s>0 &&
         std::isfinite(params.max_speed_rad_s) && params.max_speed_rad_s>=0 && speed_pid_.configured();
+    configured_=configured_ && std::isfinite(params.actual_speed_limit_rad_s) && params.actual_speed_limit_rad_s>=0 &&
+      (params.actual_speed_limit_rad_s==0 || params.actual_speed_limit_rad_s>params.max_speed_rad_s);
     if(axis_==Axis::Pitch && params.pitch_limits_confirmed) {
       configured_=configured_ && params.pitch_min_rad> -kPi && params.pitch_max_rad<kPi &&
           params.pitch_min_rad<params.pitch_max_rad &&
@@ -77,6 +80,7 @@ class Gimbal {
     const float measured=motor_->angle();
     const float measured_speed=motor_->vel();
     if(!std::isfinite(measured) || !std::isfinite(measured_speed))return fail();
+    if(params_.actual_speed_limit_rad_s>0 && std::fabs(measured_speed)>params_.actual_speed_limit_rad_s)return fail();
     // pitch 反馈已越界时不自动拉回，直接撤销控制；需要检查实物/零点后再恢复。
     if(axis_==Axis::Pitch && (measured<params_.pitch_min_rad || measured>params_.pitch_max_rad))return fail();
     if(have_state_ && (state.chassis_mode!=previous_state_.chassis_mode ||
@@ -141,7 +145,7 @@ class Gimbal {
     return pid_->configured() && p.kp>=0 && p.ki>=0 && p.kd>=0 && p.output_limit>0 &&
         p.output_limit<=params_.max_speed_rad_s && params_.max_speed_rad_s>0 &&
         (axis_==Axis::Yaw?std::fabs(p.error_period-2*kPi)<0.00001f:p.error_period==0) &&
-        speed_pid_.configured() && s.kp>0 && s.ki>=0 && s.kd>=0 && s.error_period==0 &&
+        speed_pid_.configured() && s.kp>=0 && s.ki>=0 && s.kd>=0 && s.error_period==0 &&
         s.output_limit>0 && s.output_limit<=params_.max_torque_nm &&
         std::isfinite(driver_limit) && driver_limit>0 && params_.max_torque_nm<=driver_limit;
   }

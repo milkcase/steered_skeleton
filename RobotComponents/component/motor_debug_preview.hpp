@@ -274,6 +274,14 @@ extern "C" {inline volatile robot_debug::FourSteerFault robot_four_steer_fault{}
 extern "C" {inline volatile robot_debug::RuntimeHealth robot_runtime_health{};}
 // 逆解所得四个有符号轮速rad/s；本轮只有下标0允许实际驱动，其余仅供观察。
 extern "C" {inline volatile float robot_vector_wheel_targets[4]{};}
+// 默认主程序专用只读镜像；不通过修改诊断字段改变许可、目标或PID。
+struct RobotMainDiagnostics {
+  uint32_t board=0,life=0,control=0,ready=0,imu=0,peer=0,axis_valid=0;
+  float yaw_target_rad=0,pitch_target_rad=0,axis_angle_rad=0,axis_speed_rad_s=0,axis_speed_target_rad_s=0,torque_nm=0;
+  float axis_position_target_rad=0,axis_position_error_rad=0;
+};
+extern "C" {inline volatile RobotMainDiagnostics robot_main_diagnostics{};}
+extern "C" {inline volatile robot_debug::LoopDiagnostics robot_drive_diagnostics[4]{};}
 namespace robot_debug {
 // 复制接收撤销事件到只读全局镜像；逐字段写入volatile，事件本身不参与实际许可判断。
 inline void publishRxEvent(volatile robot::GimbalChassisComm::RxEvent &out,const robot::GimbalChassisComm::RxEvent &source) {

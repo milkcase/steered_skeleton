@@ -78,7 +78,8 @@ if args.only_motors:
 
 def suite(name):
     """独立运行已有测试入口，完整保存输出；相互独立的目录可并发执行。"""
-    command=[sys.executable,str(repo/'tests'/name/'run_tests.py')]
+    script=repo/'tests'/name/'run_tests.py' if name!='robot_main' else repo/'tests/robot/run_main_tests.py'
+    command=[sys.executable,str(script)]
     if unicorn_path:
         command+=['--unicorn-path',unicorn_path]
     result=subprocess.run(command,cwd=workspace,env=env,capture_output=True,encoding='utf-8',errors='replace',timeout=240)
@@ -89,6 +90,8 @@ with ThreadPoolExecutor(max_workers=3) as pool:
     pending=[pool.submit(suite,name) for name in ('dbus_receiver','pid','imu','module_state','chassis_ik','gimbal','board_comm','robot','watchdog')]
     for future in as_completed(pending):
         item=future.result();results.append(item);print(item['check']+': '+item['result'],flush=True)
+# 主程序与历史套件顺序运行，避免同时覆盖公共编译检查的临时文件。
+item=suite('robot_main');results.append(item);print(item['check']+': '+item['result'],flush=True)
 (output/'results.json').write_text(json.dumps({'hardware_validated':False,'checks':results},ensure_ascii=False,indent=2),encoding='utf-8')
 if any(item['result']!='PASS' for item in results):
     raise SystemExit('存在软件测试失败，详见 tmp/task10/acceptance 对应日志')

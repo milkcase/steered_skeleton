@@ -29,7 +29,7 @@ with tempfile.TemporaryDirectory(prefix='pid-tests-') as temp_dir:
         binary = elf.with_suffix('.bin')
         # 使用软件浮点，便于在模拟器中执行；生产编译仍使用工程原有的硬件浮点选项。
         command = [compiler, '-mcpu=cortex-m4', '-mthumb', '-mfloat-abi=soft',
-                   '-std=gnu++20', '-O1', '-fno-exceptions', '-fno-rtti',
+                   '-DROBOT_NORMAL_MAIN_ENABLED=0','-std=gnu++20', '-O1', '-fno-exceptions', '-fno-rtti',
                    '-fno-threadsafe-statics', '-fno-builtin', '-ffunction-sections',
                    '-fdata-sections', '-nostdlib', '-Wl,-e,run_tests',
                    '-Wl,-Ttext=0x10000', '-Wl,-Tdata=0x30000',

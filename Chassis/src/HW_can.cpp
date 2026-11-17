@@ -25,6 +25,7 @@
 #include "ins_chassis_gimbal_comm.hpp"
 #include "gimbal_chassis_comm.hpp"
 #include "motor_feedback.hpp"
+#include "main_tuning_link.hpp"
 
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
@@ -135,6 +136,8 @@ void HAL_CAN_RxFifo1MsgPendingCallback(CAN_HandleTypeDef *hcan)
         // 第八项：只在共享 CAN2 按对端 ID 分发，协议对象自行检查页号、序号与 CRC。
         auto *comm=GetGimbalChassisComm();
         if(comm!=nullptr && rx_header2.StdId==comm->rxId())comm->decode(can2_rx_data);
+        // 主程序参数ACK只更新租约；不能直接改变电机输入或PID。
+        if(rx_header2.StdId==main_tuning::kParameterAckId)main_tuning::parameter_source.receive(can2_rx_data,hello_world::tick::GetTickMs());
         // yaw 由底盘负责，MIT 反馈帧为设备 ID + 0x10，与驱动反馈分开。
         auto *yaw = GetMotorYaw();
         if (yaw != nullptr &&

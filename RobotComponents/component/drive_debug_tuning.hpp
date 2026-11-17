@@ -2,7 +2,7 @@
  * @Author: milkcase choose68@163.com
  * @Date: 2026-11-15 21:54:59
  * @LastEditors: milkcase choose68@163.com
- * @LastEditTime: 2026-11-16 17:38:35
+ * @LastEditTime: 2026-11-17 21:08:58
  * @FilePath: \Chassisd:\RM\steered_project\steered_skeleton\RobotComponents\component\drive_debug_tuning.hpp
  * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
  */
@@ -10,6 +10,7 @@
 #define STEERED_DRIVE_DEBUG_TUNING_HPP_
 #include "motor_debug_tuning.hpp"
 #include "pid.hpp"
+#include "robot_tuning.hpp"
 #include <limits>
 #ifndef ROBOT_VECTOR_DRIVE_ENABLED
 #define ROBOT_VECTOR_DRIVE_ENABLED 0
@@ -18,23 +19,7 @@
 #define ROBOT_DRIVE_TUNING_ENABLED 0
 #endif
 static_assert(ROBOT_DRIVE_TUNING_ENABLED==0 || ROBOT_DRIVE_TUNING_ENABLED==1,"持续驱动开关只能为0或1");
-#ifndef ROBOT_DRIVE_INTEGRAL_LIMIT_A
-#define ROBOT_DRIVE_INTEGRAL_LIMIT_A (ROBOT_DRIVE_CURRENT_LIMIT_A*0.5f)
-#endif
-// ==================== M3508调速入口：改下列三个rpm数值，只重建/烧录底盘DriveSpeed ====================
-// 轮轴目标转速绝对上限；左杆满偏对应此值，自由小数无档位，当前保留原0.5rad/s。
-#ifndef ROBOT_DRIVE_TARGET_SPEED_RPM
-#define ROBOT_DRIVE_TARGET_SPEED_RPM 4.7746483f
-#endif
-// 目标转速每秒最多变化多少rpm；当前保留原1rad/s²，不是持续加速命令。
-#ifndef ROBOT_DRIVE_ACCELERATION_RPM_S
-#define ROBOT_DRIVE_ACCELERATION_RPM_S 9.5492966f
-#endif
-// 实际轮轴超过此转速全组归零，须大于目标上限；自由小数无档位，当前保留原1rad/s。
-#ifndef ROBOT_DRIVE_TRIP_SPEED_RPM
-#define ROBOT_DRIVE_TRIP_SPEED_RPM 9.5492966f
-#endif
-// 以下为内部单位及旧rad/s宏兼容；日常只改上面的rpm入口，不同时设置两组数值。
+// 所有M3508数值在robot_tuning.hpp；这里仅换算工程单位并兼容旧rad/s编译宏。
 #ifndef ROBOT_DRIVE_TARGET_SPEED_RAD_S
 #define ROBOT_DRIVE_TARGET_SPEED_RAD_S (ROBOT_DRIVE_TARGET_SPEED_RPM*0.10471975511965977f)
 #endif
@@ -48,18 +33,6 @@ static_assert(ROBOT_DRIVE_TUNING_ENABLED==0 || ROBOT_DRIVE_TUNING_ENABLED==1,"�
 // 驱动轮独立速度环：反馈/目标均为减速后的轮轴rad/s，输出为A，不复用GM6020参数。
 #ifndef ROBOT_DRIVE_SPEED_ENABLED
 #define ROBOT_DRIVE_SPEED_ENABLED 0
-#endif
-#ifndef ROBOT_DRIVE_SPEED_KP
-#define ROBOT_DRIVE_SPEED_KP 50.0f
-#endif
-#ifndef ROBOT_DRIVE_SPEED_KI
-#define ROBOT_DRIVE_SPEED_KI 0.0f
-#endif
-#ifndef ROBOT_DRIVE_SPEED_KD
-#define ROBOT_DRIVE_SPEED_KD 0.0f
-#endif
-#ifndef ROBOT_DRIVE_CURRENT_LIMIT_A
-#define ROBOT_DRIVE_CURRENT_LIMIT_A 2.000f
 #endif
 static_assert(ROBOT_DRIVE_SPEED_ENABLED==0 || ROBOT_DRIVE_SPEED_ENABLED==1);
 namespace robot_debug::drive {

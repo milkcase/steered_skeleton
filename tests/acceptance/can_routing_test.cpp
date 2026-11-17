@@ -1,6 +1,7 @@
 #include "can.h"
 #include "ins_motor.hpp"
 #include "motor_feedback.hpp"
+#include "main_tuning_link.hpp"
 #include "tick.hpp"
 #include "support.hpp"
 CAN_HandleTypeDef hcan1{1},hcan2{2};CAN_RxHeaderTypeDef injected{};
@@ -66,5 +67,23 @@ extern "C" int run_tests() {
   CHECK(notified>10);
   data[0]=static_cast<uint8_t>(0x80|(owned-0x10));inject(owned);
   CHECK(!robot_control::MotorFeedbacks().fresh(8,now));
+  // 参数帧只走灰色板间线，不得被另一CAN口误接收，也不得在CAN中断直接应用。
+  main_tuning::Bundle bundle{{0.6f,0.6f,1,0.5f,2,5,0,0,0,1,0.2f,0.5f,0,0.5f,0.5f,0.5f,2,-0.419f,0.515f,0.03f}};
+  uint32_t hash=0;
+#if defined(TEST_CHASSIS)
+  main_tuning::parameter_source.load(bundle);main_tuning::Sink cloud;
+  for(int i=0;i<main_tuning::Count+2;++i) {now+=5;CHECK(main_tuning::parameter_source.frame(data));
+    CHECK(cloud.receive(data,now));main_tuning::parameter_source.sent();}
+  CHECK(cloud.pending(bundle,hash,now));cloud.applied(hash);CHECK(cloud.frame(data,now));
+  inject(main_tuning::kParameterAckId,true);CHECK(!main_tuning::parameter_source.ready(now));
+  inject(main_tuning::kParameterAckId);CHECK(main_tuning::parameter_source.ready(now));
+#else
+  main_tuning::Source base;base.load(bundle);
+  for(int pass=0;pass<2;++pass) {
+    for(int i=0;i<main_tuning::Count+2;++i) {now+=5;CHECK(base.frame(data));inject(main_tuning::kParameterId,pass==1);base.sent();}
+    CHECK(main_tuning::parameter_sink.pending(bundle,hash,now)==(pass==1));
+  }
+  CHECK(!main_tuning::parameter_sink.ready(now));
+#endif
   return 0;
 }

@@ -25,6 +25,7 @@
 #include "ins_chassis_gimbal_comm.hpp"
 #include "gimbal_chassis_comm.hpp"
 #include "motor_feedback.hpp"
+#include "main_tuning_link.hpp"
 
 /* Private variables ---------------------------------------------------------*/
 static CAN_RxHeaderTypeDef rx_header1;
@@ -97,6 +98,8 @@ void HAL_CAN_RxFifo0MsgPendingCallback(CAN_HandleTypeDef *hcan)
       if(rx_header1.IDE==CAN_ID_STD && rx_header1.RTR==CAN_RTR_DATA && rx_header1.DLC==8) {
         auto *comm=GetGimbalChassisComm();
         if(comm!=nullptr && rx_header1.StdId==comm->rxId())comm->decode(can1_rx_data);
+        // 参数中断仅顺序拼包；控制周期在右下急停时才校验并整体应用。
+        if(rx_header1.StdId==main_tuning::kParameterId)main_tuning::parameter_sink.receive(can1_rx_data,hello_world::tick::GetTickMs());
       }
     }
   }

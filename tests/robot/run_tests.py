@@ -12,6 +12,7 @@ args=parser.parse_args()
 subprocess.run([sys.executable,str(Path(__file__).with_name('check_debug_config.py'))],check=True)
 subprocess.run([sys.executable,str(Path(__file__).with_name('check_four_config.py'))],check=True)
 subprocess.run([sys.executable,str(Path(__file__).with_name('check_drive_tuning.py'))],check=True)
+subprocess.run([sys.executable,str(Path(__file__).with_name('check_vector_independent_params.py'))],check=True)
 if args.unicorn_path:
     sys.path.insert(0,str(Path(args.unicorn_path).resolve()))
 from unicorn import Uc,UC_ARCH_ARM,UC_MODE_THUMB,UC_MODE_MCLASS
@@ -34,6 +35,8 @@ def run(name,sources,includes,defines=()):
          '-ffunction-sections','-fdata-sections','-nostdlib','-Wl,-e,run_tests',
          '-Wl,-Ttext=0x10000','-Wl,-Tdata=0x30000','-Wl,--section-start=.bss=0x40000',
          '-Wl,--gc-sections']
+    if not any(item.startswith('ROBOT_NORMAL_MAIN_ENABLED=') for item in defines):
+        cmd+=['-DROBOT_NORMAL_MAIN_ENABLED=0']
     for item in defines:
         cmd+=['-D'+item]
     for folder in includes:
@@ -82,8 +85,13 @@ if result:
 print('位置P=100：运行时放行、速度/电流限幅、回中恢复及故障锁止：PASS')
 # 回归使用固定基线，不把用户正在实机整定的P/限流覆盖回源文件，也不受旧档位限制干扰。
 drive_defines=['ROBOT_MOTOR_DEBUG_POWER_ENABLED=1','ROBOT_DRIVE_SPEED_ENABLED=1',
-    'ROBOT_DRIVE_SPEED_KP=2.0f','ROBOT_DRIVE_SPEED_KI=0.0f','ROBOT_DRIVE_SPEED_KD=0.0f','ROBOT_DRIVE_CURRENT_LIMIT_A=0.3f']
+    'ROBOT_DRIVE_SPEED_KP=2.0f','ROBOT_DRIVE_SPEED_KI=0.0f','ROBOT_DRIVE_SPEED_KD=0.0f','ROBOT_DRIVE_CURRENT_LIMIT_A=0.3f',
+    'ROBOT_DRIVE_TARGET_SPEED_RAD_S=0.5f','ROBOT_DRIVE_ACCELERATION_RAD_S2=1.0f','ROBOT_DRIVE_TRIP_SPEED_RAD_S=1.0f']
 drive_tuning_defines=drive_defines+['ROBOT_DRIVE_TUNING_ENABLED=1']
+result=run('single-board-restart',['tests/robot/single_board_restart_test.cpp','RobotComponents/component/gimbal_chassis_comm.cpp'],
+           ['tests/robot','RobotComponents/component','Chassis/inc'],drive_tuning_defines+['ROBOT_VECTOR_DRIVE_ENABLED=1'])
+if result:raise SystemExit(f'仅重启底盘恢复第 {result} 行失败')
+print('仅底盘重启、独立时钟和分页错相后的安全重新准备：PASS')
 result=run('vector-math',['tests/robot/vector_math_test.cpp','RobotComponents/component/gimbal_chassis_comm.cpp','Chassis/src/chassis_iksolver.cpp'],
            ['tests/robot','RobotComponents/component','Chassis/inc'],drive_tuning_defines+['ROBOT_VECTOR_DRIVE_ENABLED=1'])
 if result:raise SystemExit(f'二维投影/协议第 {result} 行失败')

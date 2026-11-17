@@ -1,4 +1,5 @@
 #include "robot_can_service.hpp"
+#include "gimbal_control_config.hpp"
 #include "motor_M3508.hpp"
 #include "motor_GM6020.hpp"
 #include "tim.h"
@@ -22,6 +23,7 @@ uint32_t motor_notification=0;
 TIM_HandleTypeDef htim6{},htim2{};
 hello_world::remote_control::DT7 remote;
 bool remote_valid=true;
+bool simulated_main_ack=true;
 GimbalChassisComm *local_comm=nullptr;
 int init_calls=0,comm_calls=0,main_calls=0;
 bool order_ok=true;
@@ -52,6 +54,15 @@ uint32_t HAL_CAN_GetTxMailboxesFreeLevel(const CAN_HandleTypeDef *) {return free
 // 记录实际序列化帧，保留总线和 ID，不操作 CAN 适配器。
 HAL_StatusTypeDef HAL_CAN_AddTxMessage(CAN_HandleTypeDef *can,const CAN_TxHeaderTypeDef *h,const uint8_t *p,uint32_t *) {
   if(frame_count<4096) {auto &f=frames[frame_count++];f.can=can;f.id=h->StdId;memcpy(f.data,p,8);if(frame_owner)f.life=frame_owner->output().state.life;}
+#if defined(TEST_PRODUCTION_MAIN) && defined(TEST_CHASSIS)
+  // 模拟保留旧云台固件：只接收线上参数、整体应用并回ACK，不共享底盘编译宏。
+  static main_tuning::Sink cloud;
+  if(h->StdId==main_tuning::kParameterId) {
+    cloud.receive(p,test_now);main_tuning::Bundle bundle;uint32_t hash;
+    if(cloud.pending(bundle,hash,test_now))cloud.applied(hash);
+    uint8_t ack[8];if(simulated_main_ack && cloud.frame(ack,test_now))main_tuning::parameter_source.receive(ack,test_now);
+  }
+#endif
   return HAL_OK;
 }
 // 记录撤销旧邮箱动作，模拟硬件取消待发命令。
@@ -111,6 +122,9 @@ void setRemote(uint8_t right,uint16_t pitch=1024,uint16_t steer=1024,uint16_t fo
 }
 // 正参数仅用于测试，不改写未确认的实车配置。
 Params params() {
+#if defined(TEST_PRODUCTION_MAIN)
+  return robot_control::kControl;
+#endif
   Params p;p.remote_mapping_confirmed=true;p.max_vx_m_s=p.max_vy_m_s=1;p.max_w_rad_s=1;
   p.yaw_rate_rad_s=p.pitch_rate_rad_s=0.5f;p.follow.kp=1;p.follow.output_limit=1;return p;
 }
@@ -135,6 +149,7 @@ void axisFeedback(DaMiao &axis,bool enabled=true) {
 #include "power_runtime_case.hpp"
 #include "direction_runtime_case.hpp"
 #include "drive_runtime_case.hpp"
+#include "main_runtime_case.hpp"
 // 验证真实 Runtime、PID、驱动序列化、任务分发及失效后的零帧/失能帧。
 extern "C" int run_tests() {
   MainTaskInit();CHECK(init_calls==1 && comm_calls==1);
@@ -157,6 +172,10 @@ extern "C" int run_tests() {
   RobotRuntime robot(Board::Gimbal,params());
   GimbalChassisComm local(GimbalChassisComm::CodePart::Gimbal,0x211,0x210),peer(GimbalChassisComm::CodePart::Chassis,0x210,0x211);
 #endif
+#if defined(TEST_PRODUCTION_MAIN)
+  gp=axis_loop.axis()==Gimbal::Axis::Yaw?gimbal_control_config::kYaw:gimbal_control_config::kPitch;
+  ap=axis_loop.axis()==Gimbal::Axis::Yaw?pid_config::kYaw:pid_config::kPitch;
+#endif
   hello_world::pid::Pid pid(ap);
   Gimbal loop(axis_loop.axis(),&axis,&pid,gp);
   robot.registerAxis(&axis,&loop,&pid);robot.registerCommunication(&local);local_comm=&local;
@@ -168,6 +187,9 @@ extern "C" int run_tests() {
   GM6020 steers[4]={GM6020(1),GM6020(2),GM6020(3),GM6020(4)};
   hello_world::chassis_ik_solver::ChassisIkSolver::Limits limits;
   limits.max_wheel_speed_rad_s=10;limits.max_steer_rate_rad_s=5;
+#if defined(TEST_PRODUCTION_MAIN)
+  limits=chassis_ik_config::kLimits;
+#endif
   Chassis::Solver solver(limits);Chassis chassis(&solver);
   Motor *wp[4],*sp[4];hello_world::pid::Pid wpid[4],spid[4];hello_world::pid::Pid *wpp[4],*spp[4];
   hello_world::pid::Pid::Params steer_speed_params[4];
@@ -178,6 +200,9 @@ extern "C" int run_tests() {
     spid[i].configure({.kp=0.1f,.output_limit=0.05f,.error_period=6.283185307179586f});
     steer_speed_params[i]={.kp=1,.output_limit=0.05f};
   }
+#if defined(TEST_PRODUCTION_MAIN)
+  for(int i=0;i<4;++i) {wpid[i].configure(pid_config::kWheel[i]);spid[i].configure(pid_config::kSteer[i]);steer_speed_params[i]=pid_config::kSteerSpeed[i];}
+#endif
   DriveController drive(&chassis,wp,sp,wpp,spp,&solver,steer_speed_params);robot.registerDrive(&drive);
   robot.registerDebugTarget(robot_debug::drive::kEnabled?static_cast<Motor *>(&wheels[0]):static_cast<Motor *>(&steers[0]));
   RobotCanService service(&robot,true);service.registerDrive(wp,sp);
@@ -282,6 +307,15 @@ extern "C" int run_tests() {
   for(int page=0;page<6;++page) {uint8_t data[8];peer.encode(data);local.decode(data);}
   robot.update();service.tick();CHECK(robot_motor_debug_diagnostics.reason==robot_debug::Reason::Peer);
   return 0;
+#endif
+#if defined(TEST_PRODUCTION_MAIN)
+  return runMainRuntime(robot,service,axis,peer
+#if defined(TEST_CHASSIS)
+    ,wp,sp,&drive,loop
+#else
+    ,nullptr,nullptr,nullptr,loop
+#endif
+  );
 #endif
   for(int step=0;step<240;++step) {
     test_now=step;robot.pollSensors();

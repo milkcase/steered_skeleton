@@ -64,9 +64,20 @@ class RobotCanService {
     if(changed || cycle_%4==1 || (!active && cycle_%20==0))sendAxis(action);
     // 一页间隔 3ms、同快照三页首尾约 6ms，满足第八项 10ms 拼包限制。
     if(cycle_%3==2)SendBoardCommunication();
+    // 参数帧最后排队且预留一个邮箱，不抢占运动/保护/普通板间帧。
+    if(main_tuning::enabled && !robot_debug::kDebugEnabled && cycle_%5==3)sendMainTuning();
     cycle_=(cycle_+1)%60;
   }
  private:
+  // 主程序参数通道独立于电机帧；只在成功排队后推进发送序号，不阻塞等待ACK。
+  void sendMainTuning() {
+    auto *can=chassis_?&hcan2:&hcan1;
+    if(HAL_CAN_GetTxMailboxesFreeLevel(can)<2)return;
+    uint8_t data[8]{};const uint32_t now=hello_world::tick::GetTickMs();
+    if(chassis_) {
+      if(main_tuning::parameter_source.frame(data) && send(can,main_tuning::kParameterId,data))main_tuning::parameter_source.sent();
+    } else if(main_tuning::parameter_sink.frame(data,now))send(can,main_tuning::kParameterAckId,data);
+  }
   // 独立动力调试：编译模式选择四转向或旧单电机路径，必须Working和最新私有会话同时许可。
   void tickDebugPower() {
     robot_->forceZeroForPreview();

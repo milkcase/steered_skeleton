@@ -3,7 +3,9 @@
 #include <cmath>
 #include <cstdint>
 #include <limits>
+#include "main_control_tuning.hpp"
 #include "pid.hpp"
+#include "robot_tuning.hpp"
 #include "motor_debug_tuning.hpp"
 #ifndef ROBOT_FOUR_STEER_ENABLED
 #define ROBOT_FOUR_STEER_ENABLED 0
@@ -12,34 +14,7 @@
 // 新的双环整定参数；旧 motor_debug_tuning.hpp 中的8A/rad不能当作速度环P照搬。
 // 外环输出rad/s，内环输出A；FourSteer模式两环均支持PID，首次升级两板，之后改数值只烧底盘。
 // 旧SteerDirection保留历史档位；FourSteer直接使用有限非负小数，增益不会改变速度和电流上限。
-#ifndef ROBOT_STEER_POSITION_KP
-#define ROBOT_STEER_POSITION_KP 10.0f
-#endif
-#ifndef ROBOT_STEER_POSITION_KI
-#define ROBOT_STEER_POSITION_KI 0.0f
-#endif
-#ifndef ROBOT_STEER_POSITION_KD
-#define ROBOT_STEER_POSITION_KD 0.0f
-#endif
 // 积分限幅约束的是积分输出项：外环单位rad/s，内环单位A；默认保持原来行为。
-#ifndef ROBOT_STEER_POSITION_INTEGRAL_LIMIT_RAD_S
-#define ROBOT_STEER_POSITION_INTEGRAL_LIMIT_RAD_S 0.0f
-#endif
-#ifndef ROBOT_STEER_SPEED_KP
-#define ROBOT_STEER_SPEED_KP 0.25f
-#endif
-#ifndef ROBOT_STEER_SPEED_KI
-#define ROBOT_STEER_SPEED_KI 0.0f
-#endif
-#ifndef ROBOT_STEER_SPEED_KD
-#define ROBOT_STEER_SPEED_KD 0.00f
-#endif
-#ifndef ROBOT_STEER_CURRENT_LIMIT_A
-#define ROBOT_STEER_CURRENT_LIMIT_A 0.500f
-#endif
-#ifndef ROBOT_STEER_SPEED_INTEGRAL_LIMIT_A
-#define ROBOT_STEER_SPEED_INTEGRAL_LIMIT_A (ROBOT_STEER_CURRENT_LIMIT_A*0.5f)
-#endif
 #ifndef ROBOT_STEER_DIRECTION_ENABLED
 #define ROBOT_STEER_DIRECTION_ENABLED 0
 #endif
@@ -49,7 +24,7 @@ namespace robot_debug::direction {
 inline constexpr bool kFour=ROBOT_FOUR_STEER_ENABLED==1;
 inline constexpr bool kEnabled=ROBOT_STEER_DIRECTION_ENABLED==1;
 inline constexpr float kPi=3.14159265358979323846f;
-#if ROBOT_FOUR_STEER_ENABLED || (defined(ROBOT_DRIVE_TUNING_ENABLED) && ROBOT_DRIVE_TUNING_ENABLED)
+#if ROBOT_NORMAL_MAIN_ENABLED || ROBOT_FOUR_STEER_ENABLED || (defined(ROBOT_DRIVE_TUNING_ENABLED) && ROBOT_DRIVE_TUNING_ENABLED)
 // 四舵调参直接使用填写值，不量化。只拒绝非有限/负增益与物理不可能的电流配置。
 constexpr bool nonnegative(float v) {return v>=0 && v<=std::numeric_limits<float>::max();}
 inline constexpr float kHardMaxPositionKp=std::numeric_limits<float>::max(),kHardMaxCurrentA=3.0f;
@@ -86,7 +61,7 @@ inline constexpr uint32_t kProfile=0x80000000u|((kPositionStep-1)<<21)|((kSpeedS
 inline constexpr int kRawCurrentLimit=static_cast<int>(kCurrentA*16384.0f/3.0f);
 // 生成位置环参数：周期误差避免跨±π时绕远；四舵模式直接采用外环PID和积分限幅。
 inline constexpr hello_world::pid::Pid::Params positionParams() {
-#if ROBOT_FOUR_STEER_ENABLED || (defined(ROBOT_DRIVE_TUNING_ENABLED) && ROBOT_DRIVE_TUNING_ENABLED)
+#if ROBOT_NORMAL_MAIN_ENABLED || ROBOT_FOUR_STEER_ENABLED || (defined(ROBOT_DRIVE_TUNING_ENABLED) && ROBOT_DRIVE_TUNING_ENABLED)
   return {.kp=kPositionKp,.ki=kPositionKi,.kd=kPositionKd,.integral_limit=kPositionIntegralLimit,
       .output_limit=kVelocityLimit,.max_dt_s=0.003f,.error_period=2*kPi};
 #else
@@ -95,7 +70,7 @@ inline constexpr hello_world::pid::Pid::Params positionParams() {
 }
 // 生成速度环参数：四舵可独立设置积分输出限幅，最终电流始终受总限流约束。
 inline constexpr hello_world::pid::Pid::Params speedParams() {
-#if ROBOT_FOUR_STEER_ENABLED || (defined(ROBOT_DRIVE_TUNING_ENABLED) && ROBOT_DRIVE_TUNING_ENABLED)
+#if ROBOT_NORMAL_MAIN_ENABLED || ROBOT_FOUR_STEER_ENABLED || (defined(ROBOT_DRIVE_TUNING_ENABLED) && ROBOT_DRIVE_TUNING_ENABLED)
   return {.kp=kSpeedKp,.ki=kSpeedKi,.kd=kSpeedKd,.integral_limit=kSpeedIntegralLimit,
       .output_limit=kCurrentA,.max_dt_s=0.003f};
 #else

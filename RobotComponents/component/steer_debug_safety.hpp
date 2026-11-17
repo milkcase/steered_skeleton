@@ -9,23 +9,10 @@
 #ifndef STEERED_STEER_DEBUG_SAFETY_HPP_
 #define STEERED_STEER_DEBUG_SAFETY_HPP_
 #include "steer_direction_tuning.hpp"
-// ==================== 转向调试速度旋钮：统一填写rpm ====================
-// 下述档位说明仅适用于旧SteerDirection；FourSteer无档位或人为整定上限，参数由底盘执行。
-// 外环输出的目标转速上限：5~120rpm，步长5；并非让电机保持这个速度一直转。
-#ifndef ROBOT_STEER_TARGET_SPEED_RPM
-#define ROBOT_STEER_TARGET_SPEED_RPM 120.0f
-#endif
-// 目标舵角变化率：5~120rpm，步长5，不能大于上面的目标转速上限。
-#ifndef ROBOT_STEER_TARGET_RATE_RPM
-#define ROBOT_STEER_TARGET_RATE_RPM 120.0f
-#endif
-// 实际反馈超速停机：5~240rpm，步长5，必须严格高于目标转速上限；默认180rpm。
-#ifndef ROBOT_STEER_TRIP_SPEED_RPM
-#define ROBOT_STEER_TRIP_SPEED_RPM 180.0f
-#endif
-// 旧模式改速度需更新两板；FourSteer首次更新两板，以后改数值只更新底盘。Ozone镜像只读。
+// 转向速度数值集中在robot_tuning.hpp；此文件只验证、换算以及兼容历史协议。
+// Main/FourSteer/持续驱动使用自由小数；旧SteerDirection的档位仅为历史回归保留。
 namespace robot_debug::steer_safety {
-#if ROBOT_FOUR_STEER_ENABLED || (defined(ROBOT_DRIVE_TUNING_ENABLED) && ROBOT_DRIVE_TUNING_ENABLED)
+#if ROBOT_NORMAL_MAIN_ENABLED || ROBOT_FOUR_STEER_ENABLED || (defined(ROBOT_DRIVE_TUNING_ENABLED) && ROBOT_DRIVE_TUNING_ENABLED)
 // 新协议云台仅授权真实遥控/会话，所有数值限幅由底盘本地执行；改值不必重烧云台。
 inline constexpr float kTargetRpm=ROBOT_STEER_TARGET_SPEED_RPM,kRateRpm=ROBOT_STEER_TARGET_RATE_RPM,kTripRpm=ROBOT_STEER_TRIP_SPEED_RPM;
 static_assert(direction::nonnegative(kTargetRpm) && direction::nonnegative(kRateRpm) && direction::nonnegative(kTripRpm) &&
@@ -87,7 +74,7 @@ static_assert(kProfileBase+kProfileSpan-1<=0xFFFFu && kTargetBase+(kSafetyProfil
     "安全包络必须完整装入target和profile协议字段");
 #endif
 // 保留用户正在调的外环增益，只替换目标速度上限，避免覆盖PID文件中的用户修改。
-inline hello_world::pid::Pid::Params positionParams() {
+inline constexpr hello_world::pid::Pid::Params positionParams() {
   auto p=direction::positionParams();p.output_limit=kTargetSpeedLimit;return p;
 }
 }

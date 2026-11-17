@@ -8,6 +8,7 @@
 #include "ins_comm.hpp"
 #include "motor_debug_preview.hpp"
 #include "motor_debug_power.hpp"
+#include "main_tuning_parameters.hpp"
 namespace robot {
 // 底盘闭环端口：云台板不链接或调用底盘实例，仅底盘本地实现此接口。
 class DrivePort {
@@ -89,6 +90,7 @@ class RobotRuntime {
   }
   // 按真实调度间隔处理最新输入、迁移、计算、统一归零和状态发布；不在此发送 CAN。
   void update(float dt_s=0.001f) {
+    updateMainTuning();
     robot_control::ControlInput input;
     input.dt_s=dt_s;
     debug_dt_s_=dt_s;debug_control_ms_=hello_world::tick::GetTickMs();
@@ -291,6 +293,49 @@ class RobotRuntime {
     return true;
   }
  protected:
+  // 主程序启动参数同步；CAN只缓存完整组，实际换参限于有效遥控的右下急停档。
+  void updateMainTuning() {
+    if(!main_tuning::enabled || robot_debug::kDebugEnabled)return;
+    remote_input::InterruptLock lock;
+    if(board_==robot_control::Board::Chassis) {
+      if(!main_tuning::parameter_source.loaded()) {const auto bundle=main_tuning::parameters();
+        main_tuning::parameter_source.load(bundle);publishMainTuning(bundle);}
+    } else {
+      hello_world::remote_control::DT7 rc;main_tuning::Bundle bundle;uint32_t hash=0;
+      if(ReadRemoteControl(rc) && rc.rc_r_switch()==hello_world::remote_control::kSwitchStateDown &&
+          main_tuning::parameter_sink.pending(bundle,hash,hello_world::tick::GetTickMs()) && gimbal_!=nullptr && axis_pid_!=nullptr) {
+        supervisor_.stop();zeroInputs();
+        const auto &v=bundle.value;auto control=params_;auto axis=gimbal_->params();auto position=axis_pid_->params();
+        using namespace main_tuning;
+        control.max_vx_m_s=v[Vx];control.max_vy_m_s=v[Vy];control.yaw_rate_rad_s=v[YawRate];
+        control.pitch_rate_rad_s=v[PitchRate];control.aim_acceleration_rad_s2=v[AimAccel];
+        position.kp=v[PositionP];position.ki=v[PositionI];position.kd=v[PositionD];
+        position.integral_limit=v[PositionIntegral];position.output_limit=v[PositionSpeed];
+        axis.speed_pid.kp=v[SpeedP];axis.speed_pid.ki=v[SpeedI];axis.speed_pid.kd=v[SpeedD];
+        axis.speed_pid.integral_limit=v[SpeedIntegral];axis.speed_pid.output_limit=v[Torque];
+        axis.max_torque_nm=v[Torque];axis.max_speed_rad_s=v[PositionSpeed];axis.max_target_rate_rad_s=v[TargetRate];
+        axis.actual_speed_limit_rad_s=v[TripSpeed];axis.pitch_min_rad=v[PitchMin];axis.pitch_max_rad=v[PitchMax];axis.pitch_guard_rad=v[PitchGuard];
+        if(supervisor_.configure(control) && axis_pid_->configure(position) && gimbal_->configure(axis) && gimbal_->loopsReady()) {
+          params_=control;parameter_sink.applied(hash);++main_tuning_apply_count_;
+          publishMainTuning(bundle);
+        }
+      }
+    }
+    const uint32_t now=hello_world::tick::GetTickMs();auto &d=robot_tuning_diagnostics;
+    d.ready=mainTuningReady(now);d.hash=board_==robot_control::Board::Chassis?main_tuning::parameter_source.hash():main_tuning::parameter_sink.hash();
+    d.applied_count=main_tuning_apply_count_;
+  }
+  // 主程序数值同步与电机控制双重门控，旧调试模式完全沿用原有独立授权。
+  bool mainTuningReady(uint32_t now) const {
+    return !main_tuning::enabled || robot_debug::kDebugEnabled ||
+      (board_==robot_control::Board::Chassis?main_tuning::parameter_source.ready(now):main_tuning::parameter_sink.ready(now));
+  }
+  // 发布底盘拟下发值/云台实际应用值；这些只读镜像不参与PID或安全许可计算。
+  void publishMainTuning(const main_tuning::Bundle &bundle) {
+    using namespace main_tuning;const auto &v=bundle.value;auto &d=robot_tuning_diagnostics;
+    d.pitch_position_p=v[PositionP];d.pitch_speed_p=v[SpeedP];d.pitch_torque_nm=v[Torque];
+    d.max_vx_m_s=v[Vx];d.yaw_rate_rad_s=v[YawRate];d.pitch_rate_rad_s=v[PitchRate];
+  }
   // 将 DT7 五通道映射为有界遥控意图；水平正值按候选配置映射为向右，现场核对。
   robot_control::RemoteIntent readRemote() {
     robot_control::RemoteIntent out;hello_world::remote_control::DT7 rc;
@@ -310,8 +355,14 @@ class RobotRuntime {
     else return {};
     out.motion={channel(rc.rc_lv())*params_.max_vx_m_s,-channel(rc.rc_lh())*params_.max_vy_m_s,
                 channel(rc.rc_wheel())*params_.max_w_rad_s};
+    if(params_.separate_only) {
+      const float length=std::hypot(values[0],values[1]);
+      if(length<=params_.deadzone)out.motion={};
+      else {const float scale=length>1?1/length:1;out.motion={values[0]*scale*params_.max_vx_m_s,-values[1]*scale*params_.max_vy_m_s,0};}
+    }
     out.yaw_rate=-channel(rc.rc_rh())*params_.yaw_rate_rad_s;
-    out.pitch_rate=channel(rc.rc_rv())*params_.pitch_rate_rad_s;
+    // 本车已确认抬枪pitch为负；分离主程序前推右杆应使枪口上抬。
+    out.pitch_rate=(params_.separate_only?-1.0f:1.0f)*channel(rc.rc_rv())*params_.pitch_rate_rad_s;
     return out;
   }
  private:
@@ -475,15 +526,16 @@ class RobotRuntime {
   }
   // 本地自检不依赖对端 Working 或本轴已使能，避免零输入使能前等待反馈造成死锁。
   bool localReady(uint32_t now) const {
-    if(!transport_ready_ || !supervisor_.configured() || axis_==nullptr || gimbal_==nullptr || axis_pid_==nullptr ||
-        !gimbal_->configured() || !gimbal_->loopsReady() || !axis_pid_->configured() || axis_pid_->params().kp<=0 ||
+    if(!mainTuningReady(now) || !transport_ready_ || !supervisor_.configured() || axis_==nullptr || gimbal_==nullptr || axis_pid_==nullptr ||
+        !gimbal_->configured() || !gimbal_->loopsReady() || !axis_pid_->configured() || axis_pid_->params().kp<0 ||
         axis_pid_->params().output_limit<=0 || axis_->get_input_type()!=hello_world::motor::InputType::kTorq ||
         axis_->current_ctrl_mode()!=hello_world::motor::DaMiao::CtrlMode::kMIT)return false;
     const auto &p=gimbal_->params();
     if(p.max_torque_nm<=0 || p.max_target_rate_rad_s<=0 || axis_pid_->params().output_limit>p.max_speed_rad_s ||
-        p.max_torque_nm>axis_->motor_info().torq_input_lim)return false;
+        p.max_torque_nm>axis_->motor_info().torq_input_lim ||
+        (p.actual_speed_limit_rad_s>0 && (!std::isfinite(axis_->vel()) || std::fabs(axis_->vel())>p.actual_speed_limit_rad_s)))return false;
     if(board_==robot_control::Board::Chassis)return gimbal_->axis()==Gimbal::Axis::Yaw && drive_!=nullptr &&
-        drive_->ready(now) && p.max_target_rate_rad_s>=params_.yaw_rate_rad_s+params_.max_w_rad_s;
+        drive_->ready(now) && p.max_target_rate_rad_s>=params_.yaw_rate_rad_s+(params_.separate_only?0:params_.max_w_rad_s);
     return gimbal_->axis()==Gimbal::Axis::Pitch && p.pitch_limits_confirmed && p.max_target_rate_rad_s>=params_.pitch_rate_rad_s;
   }
   // 读取本板方向的完整状态；恢复自检需要读取非 Working 安全状态，而非强求控制许可。
@@ -510,6 +562,15 @@ class RobotRuntime {
     if(comm_==nullptr)return;
     remote_input::InterruptLock lock;
     const auto &o=output();
+    if(!robot_debug::kDebugEnabled) {
+      auto &d=robot_main_diagnostics;d.board=board_==robot_control::Board::Chassis?0:1;
+      d.life=static_cast<uint32_t>(o.state.life);d.control=o.control;d.ready=o.ready;
+      d.imu=in.imu_ready;d.peer=in.peer_valid;d.axis_valid=in.axis_valid;
+      d.yaw_target_rad=o.target.yaw;d.pitch_target_rad=o.target.pitch;
+      if(axis_!=nullptr) {d.axis_angle_rad=axis_->angle();d.axis_speed_rad_s=axis_->vel();}
+      if(gimbal_!=nullptr) {d.axis_position_target_rad=gimbal_->result().target_rad;d.axis_position_error_rad=gimbal_->result().error_rad;
+        d.axis_speed_target_rad_s=gimbal_->result().target_speed_rad_s;d.torque_nm=gimbal_->result().torque_nm;}
+    }
     GimbalChassisComm::Flags flags;
     flags.ready=o.ready;flags.imu_ready=in.imu_ready;
     flags.remote_valid=o.remote_valid;flags.emergency_released=o.emergency_released;flags.command_valid=o.command_valid;
@@ -578,6 +639,7 @@ class RobotRuntime {
     }
   }
   uint32_t four_fault_token_=0,four_fault_count_=0;
+  uint32_t main_tuning_apply_count_=0;
   // 发布四个闭环的只读目标/反馈/电流，正常停止后active=0。
   void publishFourSteers() {
     if(!robot_debug::direction::kFour || board_!=robot_control::Board::Chassis)return;

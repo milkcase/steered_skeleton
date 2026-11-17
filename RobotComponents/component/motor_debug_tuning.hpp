@@ -10,17 +10,8 @@
 #define STEERED_MOTOR_DEBUG_TUNING_HPP_
 #include <cstdint>
 
-// ==================== 本轮只调整下面两项 ====================
-// 位置环P，单位A/rad；允许0.5～8.0，每档0.5。I、D仍为0，不在本轮开放。
-#ifndef ROBOT_MOTOR_DEBUG_KP
-#define ROBOT_MOTOR_DEBUG_KP 8.0f
-#endif
-// 指令电流绝对上限，单位A；允许0.025～0.200，每档0.025。
-// 从0.050开始，需增加时每次只增加一档并单独验收；这些值不是已证明足以驱动或机械安全的保证。
-#ifndef ROBOT_MOTOR_DEBUG_CURRENT_LIMIT_A
-#define ROBOT_MOTOR_DEBUG_CURRENT_LIMIT_A 0.100f
-#endif
-// 修改后两板都要重新构建并烧录；不在Ozone中改变量或绕过配置检查。
+#include "robot_tuning.hpp"
+// 历史单位置环参数已迁入robot_tuning.hpp末组；下方保留旧协议档位与编码。
 
 namespace robot_debug::tuning {
 // 以下为本轮软件硬边界及配置编码，不属于现场可调旋钮；运动范围、时限和遥控死区另保留原值。

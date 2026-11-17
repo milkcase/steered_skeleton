@@ -26,6 +26,7 @@ class DriveController : public DrivePort {
     for(int i=0;i<4;++i) {
       if(wheels_[i]==nullptr || steers_[i]==nullptr || wp_[i]==nullptr || sp_[i]==nullptr ||
           !robot_control::MotorFeedbacks().fresh(i,now) || !robot_control::MotorFeedbacks().fresh(i+4,now) ||
+          (main_tuning::enabled && (std::fabs(wheels_[i]->vel_raw())>robot_debug::drive::kMaxActualSpeed || std::fabs(steers_[i]->vel())>robot_debug::steer_safety::kActualSpeedLimit)) ||
           !std::isfinite(wheels_[i]->vel()) || !std::isfinite(steers_[i]->angle()) || !std::isfinite(steers_[i]->vel()) ||
           wheels_[i]->get_input_type()!=hello_world::motor::InputType::kRaw ||
           steers_[i]->get_input_type()!=hello_world::motor::InputType::kCurr ||
@@ -50,7 +51,20 @@ class DriveController : public DrivePort {
       // 舵角外环输出rad/s，舵速内环输出A；M3508仅运行轮速环，仍输出C620原始协议单位。
       const float target_speed=sp_[i]->update(targets.wheels[i].steer_rad,angles[i],dt);
       const float steer=ss_[i].update(target_speed,steer_speeds[i],dt);
-      const float wheel=wp_[i]->update(targets.wheels[i].speed_rad_s,speeds[i],dt);
+      float goal=targets.wheels[i].speed_rad_s;
+      if(main_tuning::enabled) {
+        // 回中立即置零速并清旧驱动积分，继续速度闭环主动制动，不撤销Working。
+        if(command.vx==0 && command.vy==0 && command.w==0) {if(wheel_targets_[i]!=0)wp_[i]->reset();goal=0;}
+        else {const float step=robot_debug::drive::kMaxAcceleration*dt,change=goal-wheel_targets_[i];
+          goal=wheel_targets_[i]+(change>step?step:(change< -step?-step:change));}
+      }
+      wheel_targets_[i]=goal;
+      const float wheel=wp_[i]->update(goal,speeds[i],dt);
+      if(!robot_debug::kDebugEnabled) {
+        robot_debug::publishLoops(robot_drive_diagnostics[i],{1,0,0,0,0,goal,speeds[i],goal-speeds[i],wheel/robot_debug::drive::kRawPerAmp});
+        robot_debug::publishLoops(robot_four_steer_diagnostics[i],{1,0,targets.wheels[i].steer_rad,angles[i],
+          Chassis::Solver::wrapAngle(targets.wheels[i].steer_rad-angles[i]),target_speed,steer_speeds[i],target_speed-steer_speeds[i],steer});
+      }
       if(!sp_[i]->lastUpdateOk() || !ss_[i].lastUpdateOk() || !wp_[i]->lastUpdateOk() ||
           steers_[i]->setInput(steer)!=hello_world::motor::Status::kOk ||
           wheels_[i]->setInput(wheel)!=hello_world::motor::Status::kOk) {stop();return false;}
@@ -65,7 +79,8 @@ class DriveController : public DrivePort {
       if(steers_[i]!=nullptr)steers_[i]->setInput(0);
       if(wp_[i]!=nullptr)wp_[i]->reset();
       if(sp_[i]!=nullptr)sp_[i]->reset();
-      ss_[i].reset();
+      ss_[i].reset();wheel_targets_[i]=0;
+      if(!robot_debug::kDebugEnabled) {robot_drive_diagnostics[i].active=0;robot_four_steer_diagnostics[i].active=0;}
     }
   }
  private:
@@ -80,12 +95,13 @@ class DriveController : public DrivePort {
   // 清组合调试私有状态。
   void vectorStop() override {vector_.stop();}
  private:
-  // 正增益、有限输出及正确周期是闭环放行的必要条件，不依赖驱动静默截断。
+  // 非负增益、有限输出及正确周期是闭环放行的必要条件，不依赖驱动静默截断。
   static bool pidReady(const hello_world::pid::Pid *pid,float limit,float period) {
     const auto &p=pid->params();
-    return pid->configured() && p.kp>0 && p.ki>=0 && p.kd>=0 &&
+    return pid->configured() && p.kp>=0 && p.ki>=0 && p.kd>=0 &&
         p.output_limit>0 && p.output_limit<=limit && std::fabs(p.error_period-period)<0.00001f;
   }
+  float wheel_targets_[4]{};
   Chassis *chassis_;Chassis::Solver *solver_;
   hello_world::motor::Motor *wheels_[4]{},*steers_[4]{};
   hello_world::pid::Pid *wp_[4]{},*sp_[4]{};

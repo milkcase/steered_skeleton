@@ -5,23 +5,32 @@
 using namespace robot_debug;
 using Comm=robot::GimbalChassisComm;
 uint32_t test_ms=0;
+uint32_t test_clock_offset=0;
 // 提供双板纯软件测试时间，不连接真实电机。
-uint32_t hello_world::tick::GetTickMs() {return test_ms;}
+uint32_t hello_world::tick::GetTickMs() {return test_ms-test_clock_offset;}
 struct Bench {
   Power chassis{true,true},gimbal{true,false};
   Comm c{Comm::CodePart::Chassis,0x210,0x211},g{Comm::CodePart::Gimbal,0x211,0x210};
   Input ci{},gi{};Session cs{},gs{};
   float angle=0,velocity=0;bool radio=true,imu=true,feedback=true,other=true,deliver=true;
+  bool chassis_imu=true;
+  uint32_t chassis_tx_phase=0,gimbal_tx_phase=0;
+  uint32_t chassis_clock_offset=0;
   // 以真实三页CAN协议、1ms控制和3ms分页交换挑战及左竖输入，不直接赋值授权状态。
   void tick(uint8_t right,float stick) {
     gi={};gi.now_ms=test_ms;gi.transport=true;gi.imu=imu;gi.feedback=true;gi.remote=radio;
     gi.right=right;gi.steer=std::fabs(stick)>0.05f?stick:0;gi.neutral=std::fabs(stick)<=0.05f && other;gi.other_neutral=other;
     ci=gi;ci.angle=angle;ci.velocity=velocity;ci.feedback=feedback;
+    ci.now_ms=test_ms-chassis_clock_offset;
+    ci.imu=imu && chassis_imu;
     ci.feedback_current_valid=feedback;ci.feedback_current_a=0.125f;
     Comm::GimbalData gd;Comm::ChassisData cd;
+    test_clock_offset=chassis_clock_offset;
     ci.peer=c.readPeer(gd) && gd.flags.imu_ready && gd.flags.pitch_feedback_valid;
     ci.remote=ci.peer && gd.preview.valid;ci.right=gd.preview.right;ci.left=gd.preview.left;
     ci.steer=gd.preview.steer;ci.neutral=gd.preview.neutral;ci.other_neutral=gd.preview.other_neutral;gs=gd.session;
+    if(drive::kVector) {ci.magnitude=gd.preview.magnitude;ci.vector_wheel_target=ci.magnitude*drive::kMaxTargetSpeed;}
+    test_clock_offset=0;
     gi.peer=g.readPeer(cd) && cd.flags.imu_ready && cd.flags.yaw_feedback_valid;cs=cd.session;
     const auto cr=c.rxDiagnostics(),gr=g.rxDiagnostics();
     ci.link.rx_event=cr.last_rejection;gi.link.rx_event=gr.last_rejection;
@@ -30,12 +39,15 @@ struct Bench {
     chassis.step(ci,gs);gimbal.step(gi,cs);
     auto &a=c.chassis_data();a={};a.state=chassis.output().state;a.session=chassis.session();
     a.flags.debug_preview=a.flags.debug_power=true;a.flags.ready=chassis.output().ready;a.flags.command_valid=chassis.output().command_valid;
-    a.flags.imu_ready=imu;a.flags.yaw_feedback_valid=true;a.flags.remote_valid=ci.remote;a.flags.emergency_released=ci.remote && ci.right!=2;
+    a.flags.imu_ready=ci.imu;a.flags.yaw_feedback_valid=true;a.flags.remote_valid=ci.remote;a.flags.emergency_released=ci.remote && ci.right!=2;
     auto &b=g.gimbal_data();b={};b.state=gimbal.output().state;b.session=gimbal.session();
     b.flags.debug_preview=b.flags.debug_power=true;b.flags.ready=gimbal.output().ready;b.flags.command_valid=gimbal.output().command_valid;
     b.flags.imu_ready=imu;b.flags.pitch_feedback_valid=true;b.flags.remote_valid=radio;b.flags.emergency_released=radio && right!=2;
     b.preview={gi.steer,right,1,gi.neutral,other,radio};
-    if(deliver && test_ms%3==0) {uint8_t data[8];c.encode(data);g.decode(data);g.encode(data);c.decode(data);}
+    if(drive::kVector)b.preview.magnitude=gi.neutral?0:std::fabs(stick);
+    if(deliver && test_ms%3==chassis_tx_phase) {uint8_t data[8];c.encode(data);test_clock_offset=0;g.decode(data);}
+    if(deliver && test_ms%3==gimbal_tx_phase) {uint8_t data[8];g.encode(data);test_clock_offset=chassis_clock_offset;c.decode(data);}
+    test_clock_offset=0;
     ++test_ms;
   }
   // 真实拨杆序列先复位，再回中准备，最后等待右上授权；不允许直接上档起动。
