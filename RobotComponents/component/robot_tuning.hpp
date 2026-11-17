@@ -94,7 +94,7 @@
 // ==================== 三、yaw水平轴DM-J4310（底盘执行）：以下为待实机整定初值 ====================
 // 右杆本方向满幅时瞄准目标移动的角速度，rpm；回中冻结角度目标
 #ifndef ROBOT_YAW_AIM_RPM
-#define ROBOT_YAW_AIM_RPM 10.0f
+#define ROBOT_YAW_AIM_RPM 30.0f
 #endif
 // 位置环P；角度误差rad→目标速度rad/s
 #ifndef ROBOT_YAW_POSITION_KP

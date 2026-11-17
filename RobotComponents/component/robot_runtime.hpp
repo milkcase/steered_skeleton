@@ -134,7 +134,8 @@ class RobotRuntime {
           (board_==robot_control::Board::Chassis && !drive_->update(out.motion,input.axis_angle,out.state,dt_s)))stop();
     }
     publish(input);
-    updateDebugPreview(input);
+    // Main已发布自己的运行镜像，不再每毫秒构造停用的单电机预演大快照，给前台IMU留出时间。
+    if(!main_tuning::enabled)updateDebugPreview(input);
   }
   // 编译期模式只表示零输出预演，发送层据此强制禁用非零帧及两轴使能。
   bool debugPreviewEnabled() const {return robot_debug::kPreviewEnabled;}
@@ -302,8 +303,9 @@ class RobotRuntime {
         main_tuning::parameter_source.load(bundle);publishMainTuning(bundle);}
     } else {
       hello_world::remote_control::DT7 rc;main_tuning::Bundle bundle;uint32_t hash=0;
-      if(ReadRemoteControl(rc) && rc.rc_r_switch()==hello_world::remote_control::kSwitchStateDown &&
-          main_tuning::parameter_sink.pending(bundle,hash,hello_world::tick::GetTickMs()) && gimbal_!=nullptr && axis_pid_!=nullptr) {
+      // 同组续租不需要再次读取DT7或重配PID；只有确有待应用整组时才检查右下急停。
+      if(main_tuning::parameter_sink.pending(bundle,hash,hello_world::tick::GetTickMs()) &&
+          ReadRemoteControl(rc) && rc.rc_r_switch()==hello_world::remote_control::kSwitchStateDown && gimbal_!=nullptr && axis_pid_!=nullptr) {
         supervisor_.stop();zeroInputs();
         const auto &v=bundle.value;auto control=params_;auto axis=gimbal_->params();auto position=axis_pid_->params();
         using namespace main_tuning;

@@ -27,6 +27,10 @@ def main():
     result=context['run']('main-tuning-link',['tests/robot/main_tuning_test.cpp'],['RobotComponents/component','tests/robot'])
     print('整组参数提交/坏帧拒绝/ACK截止/只重启底盘：',result)
     if result:raise SystemExit(result)
+    result=context['run']('main-status-link',['tests/robot/main_status_link_test.cpp','RobotComponents/component/gimbal_chassis_comm.cpp'],
+        ['tests/robot','RobotComponents/component','Chassis/inc'],['ROBOT_NORMAL_MAIN_ENABLED=1'])
+    print('Main安全心跳连续、双板分页错相与恢复握手：',result)
+    if result:raise SystemExit(result)
 
 
 if __name__=='__main__':main()

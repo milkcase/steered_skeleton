@@ -20,11 +20,20 @@ int runMainRuntime(robot::RobotRuntime &robot,robot::RobotCanService &service,he
     for(int i=0;i<4;++i) {uint8_t f[8]{};f[3]=100;f[6]=30;wheels[i]->decode(f);MotorFeedbacks().recordDji(i,f,test_now);
       f[3]=0;steers[i]->decode(f);MotorFeedbacks().recordDji(i+4,f,test_now);}
 #endif
-    peerFrame(peer,*local_comm,test_now>=210?robot::LifeState::Working:robot::LifeState::Resurrection);
+    // 按实车3ms一页、每1ms读取一次；不能把三页连续塞完而漏测页间peer归零。
+    GimbalChassisComm::Flags flags{true,true,true,true,true,true,true,false};
+    ModuleState peer_state{test_now>=210?LifeState::Working:LifeState::Resurrection,
+      ControlSource::RemoteControl,ChassisMode::Separate,GimbalMode::JointPosition};
 #if defined(TEST_CHASSIS)
-    if(centered) {peer.gimbal_data().motion={};for(int k=0;k<3;++k) {uint8_t f[8];peer.encode(f);local_comm->decode(f);}}
+    auto &peer_data=peer.gimbal_data();peer_data.flags=flags;peer_data.state=peer_state;
+    peer_data.yaw_target=0.2f;peer_data.motion=centered?ChassisMotion{}:ChassisMotion{0.2f,0,0};
+#else
+    auto &peer_data=peer.chassis_data();peer_data.flags=flags;peer_data.state=peer_state;
+    peer_data.feedback.yaw=0.2f;peer_data.chassis_yaw=0.1f;
 #endif
+    if(test_now%3==0) {uint8_t frame[8];peer.encode(frame);local_comm->decode(frame);}
     robot.update();service.tick();
+    if(test_now>=20)CHECK(robot_main_diagnostics.peer); // 每1ms检查页间状态，不只检查第三页之后。
     return 0;
   };
   test_now=0;setRemote(2);
@@ -36,7 +45,8 @@ int runMainRuntime(robot::RobotRuntime &robot,robot::RobotCanService &service,he
   CHECK(robot.output().control && robot.output().state.life==robot::LifeState::Working);
 #if defined(TEST_CHASSIS)
   for(int i=0;i<4;++i)CHECK(wheels[i]->getInput()>0);
-  CHECK(step(true)==0);CHECK(robot.output().control);
+  // 当前快照可能在回中前已冻结，等其余页和下一整组提交后检查制动；不改变真实通信截止。
+  for(int i=0;i<18;++i)CHECK(step(true)==0);CHECK(robot.output().control);
   for(int i=0;i<4;++i)CHECK(wheels[i]->getInput()<0); // 正转轮回中后主动反向制动。
   // 普通运动快照、遥控和IMU仍新鲜，仅参数确认失联，发送层也必须停止所有轴/轮。
   simulated_main_ack=false;for(int i=0;i<220;++i)CHECK(step(true)==0);

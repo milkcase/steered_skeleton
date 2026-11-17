@@ -154,6 +154,8 @@ class GimbalChassisComm {
   // 仅在安全状态未丢失的同模式零输出预演拼包期间保留上一份新鲜完整快照。
   // 动力格式仅在同版本下复用原子读取；安全位下降、退出Working或新急停/回中第一页立即撤销。
   bool previewContinuation(const ModuleState &state,const Flags &flags,const uint8_t *page0) const;
+  // 正常Main在Dead/恢复心跳分页期间保留旧完整状态；只允许安全条件不下降，绝不授予Working指令。
+  bool statusContinuation(const ModuleState &state,const Flags &flags) const;
   // 检查本地/对端状态与全部比例编码字段，拒绝未知枚举、非有限值和越量程。
   bool packLocal(uint8_t payload[15]) const;
   // 对完整 payload 解码并提交对端语义；不在此函数中更新生命状态或电机输入。

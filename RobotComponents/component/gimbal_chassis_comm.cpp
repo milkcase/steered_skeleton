@@ -146,9 +146,9 @@ void robot::GimbalChassisComm::decode(const uint8_t rx_data[8]) {
   if(page==0) {
     ModuleState state;Flags flags;
     if(!readCommon(rx_data+2,state,flags)) {++rx_diagnostics_.format_errors;reject(RxFailure::Header,rx_data);return;}
-    // 预演本来就没有普通Working许可，不能因此每收第一页就撤销上一份完整预演快照。
-    // 只对状态连续的零输出预演保留读取；急停/失效页、坏帧、过期及普通控制仍按原规则撤销。
-    if(!permitted(state,flags) && !previewContinuation(state,flags,rx_data+2)) {
+    // “没有Working动力许可”不等于“状态心跳离线”；安全心跳及连续预演可沿用旧完整状态。
+    // 新的状态和目标仍须完整提交；安全位下降、坏帧、过期及Working退出仍立即撤销。
+    if(!permitted(state,flags) && !previewContinuation(state,flags,rx_data+2) && !statusContinuation(state,flags)) {
       recordRxRejection(RxFailure::SafetyPage,rx_data);inhibit_=true;
     }
     const uint8_t advance=static_cast<uint8_t>(seq-last_seq_);
@@ -333,6 +333,22 @@ bool robot::GimbalChassisComm::previewContinuation(const ModuleState &state,cons
       !(old_flags.imu_ready && !flags.imu_ready) &&
       !(old_flags.yaw_feedback_valid && !flags.yaw_feedback_valid) &&
       !(old_flags.pitch_feedback_valid && !flags.pitch_feedback_valid);
+}
+
+// 正常Main的通信在线与动力许可分开：旧完整快照处于Dead/恢复阶段时可连续读取。
+// 仅沿用既有新鲜状态，不提交新碎片、不续接收时间；真实安全下降仍在第一页立即撤销。
+bool robot::GimbalChassisComm::statusContinuation(const ModuleState &state,const Flags &flags) const {
+  if(flags.debug_preview || inhibit_ || isOffline())return false;
+  const auto &old_flags=code_part_==CodePart::Chassis?gimbal_data_.flags:chassis_data_.flags;
+  const auto &old_state=code_part_==CodePart::Chassis?gimbal_data_.state:chassis_data_.state;
+  if(old_flags.debug_preview || old_state.life==LifeState::Working || state.life==LifeState::Working)return false;
+  // Dead→恢复只保留旧Dead，新的恢复状态仍要等三页完整提交；恢复→Dead必须立即撤销。
+  if(old_state.life==LifeState::Resurrection && (state.life!=LifeState::Resurrection ||
+      state.source!=old_state.source || state.chassis_mode!=old_state.chassis_mode || state.gimbal_mode!=old_state.gimbal_mode))return false;
+  return !(old_flags.ready && !flags.ready) && !(old_flags.imu_ready && !flags.imu_ready) &&
+      !(old_flags.remote_valid && !flags.remote_valid) && !(old_flags.emergency_released && !flags.emergency_released) &&
+      !(old_flags.command_valid && !flags.command_valid) && !(old_flags.yaw_feedback_valid && !flags.yaw_feedback_valid) &&
+      !(old_flags.pitch_feedback_valid && !flags.pitch_feedback_valid) && !(!old_flags.fault && flags.fault);
 }
 
 // 只检查对端快照的必要控制位，不能替代本板急停、设备反馈及最终输出判断。
