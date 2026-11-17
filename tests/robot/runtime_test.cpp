@@ -11,6 +11,7 @@ using namespace robot_control;
 using namespace robot;
 using namespace hello_world::motor;
 uint32_t test_now=0,free_mailboxes=3,aborts=0,frame_count=0;
+uint32_t can_tick_injection=0;
 CAN_HandleTypeDef hcan1{},hcan2{};
 bool can1_listening=false,can2_listening=false;
 int can_init_failure=0;
@@ -28,7 +29,15 @@ struct Frame {CAN_HandleTypeDef *can;uint32_t id;uint8_t data[8];LifeState life=
 Frame frames[4096];
 RobotRuntime *frame_owner=nullptr;
 // 提供可控时间源，所有生产有效期逻辑仍使用真实无符号差值。
-uint32_t hello_world::tick::GetTickMs() {return test_now;}
+uint32_t hello_world::tick::GetTickMs() {
+  // 在真实Runtime两次取时之间模拟CAN跨毫秒更新，检验旧控制时间不能使新反馈下溢失效。
+  if(can_tick_injection!=0 && --can_tick_injection==0) {
+    ++test_now;uint8_t data[8]{};data[6]=data[7]=30;
+    for(int i=0;i<8;++i)MotorFeedbacks().recordDji(i,data,test_now);
+    data[0]=1;MotorFeedbacks().recordAxis(1,data,test_now);
+  }
+  return test_now;
+}
 // 提供 HAL 毫秒接口，真实 DBUS 临界区不调用外设。
 extern "C" uint32_t HAL_GetTick() {return test_now;}
 // 返回测试遥控快照，保持 DT7 的真实 decode 和 getter。
@@ -94,8 +103,8 @@ extern "C" void CommTaskInit() {++comm_calls;}
 extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *);
 
 // 构造明确的拨杆与五通道 DBUS 字节，再交给提供的 DT7 解码器。
-void setRemote(uint8_t right,uint16_t pitch=1024,uint16_t steer=1024) {
-  uint16_t c[5]={1024,pitch,steer,1024,1024};uint8_t d[18]{};
+void setRemote(uint8_t right,uint16_t pitch=1024,uint16_t steer=1024,uint16_t forward=1024) {
+  uint16_t c[5]={1024,pitch,steer,forward,1024};uint8_t d[18]{};
   d[0]=c[0];d[1]=(c[0]>>8)|(c[1]<<3);d[2]=(c[1]>>5)|(c[2]<<6);
   d[3]=c[2]>>2;d[4]=(c[2]>>10)|(c[3]<<1);d[5]=(c[3]>>7)|(right<<4)|(1<<6);
   d[16]=c[4];d[17]=c[4]>>8;remote.decode(d);
@@ -124,6 +133,8 @@ void axisFeedback(DaMiao &axis,bool enabled=true) {
   axis.decode(f);MotorFeedbacks().recordAxis(axis.motor_info().id,f,test_now);
 }
 #include "power_runtime_case.hpp"
+#include "direction_runtime_case.hpp"
+#include "drive_runtime_case.hpp"
 // 验证真实 Runtime、PID、驱动序列化、任务分发及失效后的零帧/失能帧。
 extern "C" int run_tests() {
   MainTaskInit();CHECK(init_calls==1 && comm_calls==1);
@@ -134,6 +145,7 @@ extern "C" int run_tests() {
   DM_J4310 axis;axis.init(1,opt,false,false);
   hello_world::pid::Pid::Params ap{.kp=2,.output_limit=1};
   Gimbal::Params gp;gp.max_torque_nm=1;gp.max_target_rate_rad_s=3;
+  gp.max_speed_rad_s=1;gp.speed_pid={.kp=1,.output_limit=1};
 #if defined(TEST_CHASSIS)
   ap.error_period=6.283185307179586f;
   Gimbal axis_loop(Gimbal::Axis::Yaw,&axis,nullptr,gp);
@@ -158,14 +170,16 @@ extern "C" int run_tests() {
   limits.max_wheel_speed_rad_s=10;limits.max_steer_rate_rad_s=5;
   Chassis::Solver solver(limits);Chassis chassis(&solver);
   Motor *wp[4],*sp[4];hello_world::pid::Pid wpid[4],spid[4];hello_world::pid::Pid *wpp[4],*spp[4];
+  hello_world::pid::Pid::Params steer_speed_params[4];
   for(int i=0;i<4;++i) {
     OptionalParams current;current.input_type=InputType::kCurr;steers[i].init(i+1,current);
     wp[i]=&wheels[i];sp[i]=&steers[i];wpp[i]=&wpid[i];spp[i]=&spid[i];
     wpid[i].configure({.kp=10,.output_limit=100});
     spid[i].configure({.kp=0.1f,.output_limit=0.05f,.error_period=6.283185307179586f});
+    steer_speed_params[i]={.kp=1,.output_limit=0.05f};
   }
-  DriveController drive(&chassis,wp,sp,wpp,spp,&solver);robot.registerDrive(&drive);
-  robot.registerDebugTarget(&steers[0]);
+  DriveController drive(&chassis,wp,sp,wpp,spp,&solver,steer_speed_params);robot.registerDrive(&drive);
+  robot.registerDebugTarget(robot_debug::drive::kEnabled?static_cast<Motor *>(&wheels[0]):static_cast<Motor *>(&steers[0]));
   RobotCanService service(&robot,true);service.registerDrive(wp,sp);
 #else
   RobotCanService service(&robot,false);
@@ -187,10 +201,24 @@ extern "C" int run_tests() {
   robot.setTransportReady(true);setRemote(3);
 #if ROBOT_MOTOR_DEBUG_POWER_ENABLED
   frame_owner=&robot;
+#if ROBOT_DRIVE_SPEED_ENABLED
+#if defined(TEST_CHASSIS)
+  return runDriveRuntime(robot,service,axis,peer,wp,sp);
+#else
+  return runDriveRuntime(robot,service,axis,peer,nullptr,nullptr);
+#endif
+#elif ROBOT_STEER_DIRECTION_ENABLED
+#if defined(TEST_CHASSIS)
+  return runDirectionRuntime(robot,service,axis,peer,wp,sp);
+#else
+  return runDirectionRuntime(robot,service,axis,peer,nullptr,nullptr);
+#endif
+#else
 #if defined(TEST_CHASSIS)
   return runPowerRuntime(robot,service,axis,peer,wp,sp);
 #else
   return runPowerRuntime(robot,service,axis,peer,nullptr,nullptr);
+#endif
 #endif
 #endif
 #if ROBOT_MOTOR_DEBUG_PREVIEW_ENABLED

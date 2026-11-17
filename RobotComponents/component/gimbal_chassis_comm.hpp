@@ -22,6 +22,7 @@
 #include "tick.hpp"
 #include "module_state.hpp"
 #include "motor_debug_tuning.hpp"
+#include "motor_debug_mode.hpp"
 
 /* Exported macro ------------------------------------------------------------*/
 namespace robot {
@@ -36,13 +37,15 @@ class GimbalChassisComm {
 
   static constexpr uint32_t kChassisTxId=0x210, kGimbalTxId=0x211;
   static constexpr uint32_t kOfflineMs=100, kAssemblyMs=10;
-  // 旧固定版本1～3不再使用；当前编号由可调P和电流档位唯一生成，混烧不同参数不能授权。
-  static constexpr uint16_t kPowerProfile=robot_debug::tuning::kProfile;
+  // 当前调试版本比较模式/安全包络，增益只由底盘使用；速度或限流不同仍不能授权。
+  static constexpr uint16_t kPowerProfile=robot_debug::mode::kProfile;
+  static constexpr uint8_t kDebugTarget=robot_debug::mode::kTarget;
   enum class RxFailure : uint32_t {None,Crc,Header,SafetyPage,Order,Assembly,Payload};
   // 保存首次撤销完整快照时的页和安全字节；之后的连带缺页不覆盖，直到重新收齐有效快照。
   struct RxEvent {
     RxFailure reason=RxFailure::None;
     uint32_t time_ms=0,page=0,expected_page=0,seq=0,expected_seq=0,state_byte=0,flags_byte=0;
+    uint32_t control_signal_valid=0,right=0,neutral=0; // 只记录撤销原因，不提供运行授权。
   };
   struct RxDiagnostics {
     uint32_t completed=0,crc_errors=0,format_errors=0,order_errors=0,assembly_timeouts=0,replays=0;
@@ -58,7 +61,7 @@ class GimbalChassisComm {
   };
   struct DebugSession {
     uint32_t token=0;
-    uint8_t phase=0,target=1;
+    uint8_t phase=0,target=kDebugTarget;
     uint16_t profile=kPowerProfile;
   };
 
@@ -96,6 +99,7 @@ class GimbalChassisComm {
       float steer=0;
       uint8_t right=2,left=1;
       bool neutral=false,other_neutral=false,valid=false;
+      float magnitude=0; // 二维径向幅度，与方向分开传输。
     } preview{};
     DebugSession session{};
   };

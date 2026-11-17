@@ -14,6 +14,8 @@
 static_assert(ROBOT_MOTOR_DEBUG_PREVIEW_ENABLED==0 || ROBOT_MOTOR_DEBUG_PREVIEW_ENABLED==1);
 static_assert(ROBOT_MOTOR_DEBUG_POWER_ENABLED==0 || ROBOT_MOTOR_DEBUG_POWER_ENABLED==1);
 static_assert(!(ROBOT_MOTOR_DEBUG_PREVIEW_ENABLED && ROBOT_MOTOR_DEBUG_POWER_ENABLED));
+static_assert(!robot_debug::direction::kEnabled || ROBOT_MOTOR_DEBUG_POWER_ENABLED==1,"方向双环只能用于独立受限动力构建");
+static_assert(!robot_debug::drive::kEnabled || ROBOT_MOTOR_DEBUG_POWER_ENABLED==1,"驱动速度环只能用于独立动力构建");
 
 namespace robot_debug {
 inline constexpr bool kPreviewEnabled=ROBOT_MOTOR_DEBUG_PREVIEW_ENABLED==1;
@@ -31,7 +33,8 @@ struct LinkDiagnostics {
 };
 struct Input {
   uint32_t now_ms=0;
-  float dt_s=0.001f,steer=0,angle=0,velocity=0;
+  float dt_s=0.001f,steer=0,angle=0,velocity=0,yaw_delta=0;
+  float magnitude=0,vector_wheel_target=0;
   uint8_t right=2,left=1;
   bool transport=false,imu=false,peer=false,feedback=false,remote=false;
   bool neutral=false,other_neutral=false;
@@ -58,14 +61,41 @@ enum StopCheckBits : uint32_t {
 };
 // 底盘按实际运行、云台按已授权会话锁存首次失败；恢复和右下均不覆盖，下一轮真实失败才替换。
 struct StopCheck {
+  // 样本失败位：1摇杆非有限、2摇杆越界、4角度非有限、8速度非有限、16回中标记矛盾。
+  uint32_t sample_failures=0,neutral=0;
   uint32_t count=0,run_count=0,time_ms=0,source=0,mask=0,control_age_ms=0,elapsed_ms=0;
   uint32_t transport=0,imu=0,peer=0,feedback=0,remote=0,right=0,left=0,other_neutral=0;
   uint32_t local_token=0,peer_token=0,local_phase=0,peer_phase=0,peer_target=0,peer_profile=0;
   uint32_t snapshot_valid=0,peer_age_ms=0,peer_fault=0;
   float stick=0,dt_s=0;
+  float actual_angle=0,start_angle=0,actual_velocity=0,target_velocity=0,speed_limit=0,offset_limit=0;
   robot::GimbalChassisComm::RxEvent rx_event{};
   uint32_t channels_valid=0;
   float channels[5]{};
+};
+// Ozone可直接观察的双环读数；active=1才表示当前有控制许可，recorded_loops是最后有效周期快照。
+struct LoopDiagnostics {
+  uint32_t active=0,run_count=0;
+  float position_target_rad=0,position_feedback_rad=0,position_error_rad=0;
+  float speed_target_rad_s=0,speed_feedback_rad_s=0,speed_error_rad_s=0;
+  float current_command_a=0;
+};
+// 四舵启动/运行首次失败快照；右下恢复不覆盖，下一会话真实失败才更新，不用于控制许可。
+struct FourSteerFault {
+  uint32_t count=0,time_ms=0,wheel_id=0,source=0,failure_mask=0;
+  Stage stage=Stage::Disabled;Reason reason=Reason::None;
+  uint32_t local_token=0,peer_token=0,local_phase=0,peer_phase=0;
+  uint32_t transport=0,imu=0,feedback=0,remote=0,peer=0,right=0,left=0;
+  uint32_t snapshot_valid=0,peer_age_ms=0,control_age_ms=0,control_mask=0;
+  float dt_s=0,angle_rad=0,velocity_rad_s=0;
+  robot::GimbalChassisComm::RxEvent rx_event{};
+};
+// IMU缓存和前台采样节奏的只读观测，区分采样断档、底层未就绪与对端传播失效。
+struct RuntimeHealth {
+  uint32_t board=0,poll_count=0,ready_updates=0,imu_cache_ready=0,imu_age_ms=0;
+  uint32_t max_poll_gap_ms=0,imu_drops=0,last_imu_drop_age_ms=0,last_imu_drop_cache_ready=0;
+  uint32_t control_us=0,max_control_us=0;
+  uint32_t imu_state=0,imu_last_interval_us=0,imu_max_interval_us=0,imu_timing_fault=0;
 };
 struct Diagnostics {
   uint32_t sequence=0,board=0,target_id=1,enabled=0,zero_output_only=1;
@@ -86,6 +116,17 @@ struct Diagnostics {
   float feedback_current_a=0,recorded_peak_feedback_current_a=0;
   uint32_t configured_profile=0;
   float configured_kp=0,configured_current_limit_a=0;
+  uint32_t direction_mode=0,time_limit_enabled=1,range_limit_enabled=1;
+  float requested_angle=0,equivalent_angle=0,target_velocity=0,speed_error=0;
+  float configured_speed_kp=0,configured_speed_ki=0,configured_speed_kd=0;
+  LoopDiagnostics loops{},recorded_loops{};
+  uint32_t drive_mode=0,position_loop_enabled=1;
+  float requested_speed_rad_s=0,displacement_rad=0,recorded_displacement_rad=0;
+  float recorded_peak_speed_rad_s=0;
+  float configured_actual_speed_limit_rad_s=0,equivalent_drive_sign=1;
+  uint32_t algorithm_version=0;
+  float configured_target_speed_rpm=0,configured_target_rate_rpm=0,configured_trip_speed_rpm=0;
+  float configured_drive_acceleration_rpm_s=0;
 };
 
 // 纯内存的左前转向预演器：只计算目标，不持有电机或CAN指针，也不计算可发送的动力。
@@ -97,6 +138,13 @@ class Preview {
   const Diagnostics &diagnostics() const {return d_;}
   // 供有真实失效依据的动力包装层撤销本轮，仍执行原有锁止，不自动重新准备。
   void cancel(Reason reason) {reject(reason,Stage::Latched);}
+  // 仅正常回中使用：归零并记录一次停止，保留已经完成的右下/回中准备，允许下一次有效偏杆重启。
+  void pauseForCenter(const Input &in) {
+    if(running_) {++d_.stop_count;d_.recorded_target=d_.target_angle;d_.end_angle=in.angle;d_.last_stop=Reason::Centered;}
+    running_=holding_=false;armed_=reset_seen_=true;offset_=0;
+    d_.now_ms=in.now_ms;d_.actual_angle=in.angle;d_.actual_velocity=in.velocity;d_.remaining_ms=0;
+    d_.stage=Stage::WaitStick;d_.reason=Reason::Centered;d_.final_input=0;
+  }
   // 更新真实输入、检查安全条件并执行一次预演；输出字段始终固定为零。
   void step(const Input &in) {
     observeLink(in);
@@ -115,7 +163,7 @@ class Preview {
     if(!std::isfinite(in.steer) || std::fabs(in.steer)>1.001f ||
         !std::isfinite(in.angle) || !std::isfinite(in.velocity)) {reject(Reason::Sample);return;}
     // 预演协议的摇杆按0.001量化；中位标记与明显偏杆冲突时拒绝，不信任伪造的回中标记。
-    if(in.neutral && (!in.other_neutral || std::fabs(in.steer)>0.051f)) {reject(Reason::Sample);return;}
+    if(in.neutral && (!in.other_neutral || std::fabs(in.steer)>(direction::kEnabled?0.0001f:0.051f))) {reject(Reason::Sample);return;}
     if(in.left!=1 || (in.right!=1 && in.right!=2 && in.right!=3) || !in.other_neutral) {
       reject(Reason::Mode);return;
     }
@@ -133,8 +181,8 @@ class Preview {
       return;
     }
     if(!armed_) {reject(Reason::NeedReset,Stage::WaitReset);return;}
-    if(running_ && in.now_ms-d_.started_ms>=500) {reject(Reason::TimeLimit,Stage::Latched);return;}
-    if(std::fabs(in.steer)<=0.05f) {
+    if(!mode::kResumable && running_ && in.now_ms-d_.started_ms>=500) {reject(Reason::TimeLimit,Stage::Latched);return;}
+    if((direction::kEnabled || drive::kVector)?in.neutral:std::fabs(in.steer)<=0.05f) {
       if(running_)reject(Reason::Centered,Stage::Latched);
       else {d_.stage=Stage::WaitStick;d_.reason=Reason::None;}
       return;
@@ -142,13 +190,40 @@ class Preview {
     if(!running_) {
       running_=true;offset_=0;d_.start_angle=in.angle;d_.started_ms=in.now_ms;++d_.run_count;
     }
-    // 仅供屏幕预演：最多偏离起点5°，目标每秒最多改变5°；此值不写入实车动力配置。
+    // 历史模式限起点±5°；方向版取消该范围，只保留目标每秒最多改变5°，不改普通整车配置。
     constexpr float limit=0.0872664626f;
-    offset_-=in.steer*limit*in.dt_s;
-    if(offset_>limit)offset_=limit;
-    if(offset_< -limit)offset_=-limit;
+    if(drive::kEnabled) {
+      // 驱动只生成有加速度限制的轮速目标，不将角度误差送入位置环；500ms由上方共同截止。
+      d_.requested_speed_rad_s=drive::kVector?in.vector_wheel_target:in.steer*drive::kMaxTargetSpeed;
+      const float change=d_.requested_speed_rad_s-offset_,step=drive::kMaxAcceleration*in.dt_s;
+      offset_+=change>step?step:(change< -step?-step:change);
+      d_.target_velocity=offset_;d_.speed_error=offset_-in.velocity;
+      d_.target_angle=d_.start_angle;d_.error=0;
+      d_.remaining_ms=drive::kTuning?0:drive::kDurationMs-(in.now_ms-d_.started_ms);d_.stage=Stage::Previewing;d_.reason=Reason::None;return;
+    }
+    if(direction::kEnabled) {
+      if(!std::isfinite(in.yaw_delta)) {reject(Reason::Sample);return;}
+      // 云台系方向加本地yaw即车体系方向；目标从当前角起步，按配置限速，无起点±5°限制。
+      d_.requested_angle=wrap(in.steer*direction::kPi+in.yaw_delta);
+      // 与四轮逆解相同：超过90°改选等效舵角，未来驱动轮速度取反；本轮M3508仍为零。
+      d_.equivalent_angle=d_.requested_angle;
+      d_.equivalent_drive_sign=1;
+      if(std::fabs(wrap(d_.equivalent_angle-in.angle))>direction::kPi*0.5f) {
+        d_.equivalent_angle=wrap(d_.equivalent_angle+direction::kPi);
+        d_.equivalent_drive_sign=-1;
+      }
+      const float requested_offset=wrap(d_.equivalent_angle-d_.start_angle);
+      const float change=wrap(requested_offset-offset_);
+      const float step=steer_safety::kTargetRateRadS*in.dt_s;
+      offset_+=change>step?step:(change< -step?-step:change);
+      offset_=wrap(offset_);
+    } else offset_-=in.steer*limit*in.dt_s;
+    if(!direction::kEnabled) {
+      if(offset_>limit)offset_=limit;
+      if(offset_< -limit)offset_=-limit;
+    }
     d_.target_angle=wrap(d_.start_angle+offset_);d_.error=wrap(d_.target_angle-in.angle);
-    d_.remaining_ms=500-(in.now_ms-d_.started_ms);d_.stage=Stage::Previewing;d_.reason=Reason::None;
+    d_.remaining_ms=direction::kEnabled?0:500-(in.now_ms-d_.started_ms);d_.stage=Stage::Previewing;d_.reason=Reason::None;
   }
  private:
   // 锁存1到0的跳变及其来源，即使Ozone错过短暂状态，也能在停止后定位不同步失效。
@@ -193,11 +268,25 @@ class Preview {
 
 // 每份固件都有独立全局对象；可直接在Ozone中按这个名字读取，不需要局部变量作用域。
 extern "C" {inline volatile robot_debug::Diagnostics robot_motor_debug_diagnostics{};}
+// 数组下标0~3依次左前、左后、右后、右前；供Ozone观察，绝不读取其值决定动力。
+extern "C" {inline volatile robot_debug::LoopDiagnostics robot_four_steer_diagnostics[4]{};}
+extern "C" {inline volatile robot_debug::FourSteerFault robot_four_steer_fault{};}
+extern "C" {inline volatile robot_debug::RuntimeHealth robot_runtime_health{};}
+// 逆解所得四个有符号轮速rad/s；本轮只有下标0允许实际驱动，其余仅供观察。
+extern "C" {inline volatile float robot_vector_wheel_targets[4]{};}
 namespace robot_debug {
 // 复制接收撤销事件到只读全局镜像；逐字段写入volatile，事件本身不参与实际许可判断。
 inline void publishRxEvent(volatile robot::GimbalChassisComm::RxEvent &out,const robot::GimbalChassisComm::RxEvent &source) {
   out.reason=source.reason;out.time_ms=source.time_ms;out.page=source.page;out.expected_page=source.expected_page;
   out.seq=source.seq;out.expected_seq=source.expected_seq;out.state_byte=source.state_byte;out.flags_byte=source.flags_byte;
+  out.control_signal_valid=source.control_signal_valid;out.right=source.right;out.neutral=source.neutral;
+}
+// 逐字段发布两环目标和真实反馈，调试器写镜像不会反向影响私有PID或动作许可。
+inline void publishLoops(volatile LoopDiagnostics &out,const LoopDiagnostics &in) {
+  out.active=in.active;out.run_count=in.run_count;
+  out.position_target_rad=in.position_target_rad;out.position_feedback_rad=in.position_feedback_rad;out.position_error_rad=in.position_error_rad;
+  out.speed_target_rad_s=in.speed_target_rad_s;out.speed_feedback_rad_s=in.speed_feedback_rad_s;out.speed_error_rad_s=in.speed_error_rad_s;
+  out.current_command_a=in.current_command_a;
 }
 // 发布只读诊断；偶数序列表示一次复制完成，实际控制从不读取这个可被调试器写入的对象。
 inline void publish(const Diagnostics &source) {
@@ -221,10 +310,28 @@ inline void publish(const Diagnostics &source) {
   out.recorded_feedback_samples=source.recorded_feedback_samples;
   out.recorded_peak_feedback_current_a=source.recorded_peak_feedback_current_a;
   out.configured_profile=source.configured_profile;out.configured_kp=source.configured_kp;
+  out.configured_drive_acceleration_rpm_s=source.configured_drive_acceleration_rpm_s;
   out.configured_current_limit_a=source.configured_current_limit_a;
+  out.direction_mode=source.direction_mode;out.time_limit_enabled=source.time_limit_enabled;
+  out.range_limit_enabled=source.range_limit_enabled;
+  out.requested_angle=source.requested_angle;out.equivalent_angle=source.equivalent_angle;
+  out.target_velocity=source.target_velocity;out.speed_error=source.speed_error;
+  out.configured_speed_kp=source.configured_speed_kp;out.configured_speed_ki=source.configured_speed_ki;
+  out.configured_speed_kd=source.configured_speed_kd;
+  publishLoops(out.loops,source.loops);publishLoops(out.recorded_loops,source.recorded_loops);
+  out.drive_mode=source.drive_mode;out.position_loop_enabled=source.position_loop_enabled;
+  out.requested_speed_rad_s=source.requested_speed_rad_s;out.displacement_rad=source.displacement_rad;
+  out.recorded_displacement_rad=source.recorded_displacement_rad;
+  out.recorded_peak_speed_rad_s=source.recorded_peak_speed_rad_s;
+  out.configured_actual_speed_limit_rad_s=source.configured_actual_speed_limit_rad_s;
+  out.equivalent_drive_sign=source.equivalent_drive_sign;
+  out.algorithm_version=source.algorithm_version;
+  out.configured_target_speed_rpm=source.configured_target_speed_rpm;out.configured_target_rate_rpm=source.configured_target_rate_rpm;
+  out.configured_trip_speed_rpm=source.configured_trip_speed_rpm;
   out.stop_check.count=source.stop_check.count;out.stop_check.run_count=source.stop_check.run_count;
   out.stop_check.time_ms=source.stop_check.time_ms;out.stop_check.source=source.stop_check.source;
   out.stop_check.mask=source.stop_check.mask;out.stop_check.control_age_ms=source.stop_check.control_age_ms;
+  out.stop_check.sample_failures=source.stop_check.sample_failures;out.stop_check.neutral=source.stop_check.neutral;
   out.stop_check.elapsed_ms=source.stop_check.elapsed_ms;
   out.stop_check.transport=source.stop_check.transport;out.stop_check.imu=source.stop_check.imu;
   out.stop_check.peer=source.stop_check.peer;out.stop_check.feedback=source.stop_check.feedback;
@@ -236,6 +343,9 @@ inline void publish(const Diagnostics &source) {
   out.stop_check.snapshot_valid=source.stop_check.snapshot_valid;out.stop_check.peer_age_ms=source.stop_check.peer_age_ms;
   out.stop_check.peer_fault=source.stop_check.peer_fault;out.stop_check.stick=source.stop_check.stick;
   out.stop_check.dt_s=source.stop_check.dt_s;
+  out.stop_check.actual_angle=source.stop_check.actual_angle;out.stop_check.start_angle=source.stop_check.start_angle;
+  out.stop_check.actual_velocity=source.stop_check.actual_velocity;out.stop_check.target_velocity=source.stop_check.target_velocity;
+  out.stop_check.speed_limit=source.stop_check.speed_limit;out.stop_check.offset_limit=source.stop_check.offset_limit;
   publishRxEvent(out.stop_check.rx_event,source.stop_check.rx_event);
   out.stop_check.channels_valid=source.stop_check.channels_valid;
   for(int i=0;i<5;++i)out.stop_check.channels[i]=source.stop_check.channels[i];

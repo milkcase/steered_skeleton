@@ -7,11 +7,14 @@ struct MotorInfo { float torq_input_lim=7.0f; };
 class DaMiao {
  public:
   float position=0,input=0,mit_position=0,mit_velocity=0,mit_kp=0,mit_kd=0;
+  float velocity=0;
   bool enabled=true,reject_nonzero=false;
   InputType input_type=InputType::kTorq;
   MotorInfo info{};
   // 提供模拟的已标定角度，可注入 NaN 或软件限位外反馈。
   float angle() const { return position; }
+  // 提供独立速度反馈，验证内环会制动而非仅计算位置误差。
+  float vel() const { return velocity; }
   // 返回模拟使能状态；控制器不得自行改变该状态。
   bool is_enabled() const { return enabled; }
   // 返回输入单位，使测试能够验证错误输入类型会被拒绝。

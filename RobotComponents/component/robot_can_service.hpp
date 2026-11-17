@@ -15,6 +15,7 @@ class RobotCanService {
   // 注册底盘本地的共享帧电机，云台固件不调用该接口。
   void registerDrive(hello_world::motor::Motor *const wheels[4],hello_world::motor::Motor *const steers[4]) {
     for(int i=0;i<4;++i) {wheels_[i]=wheels[i];steers_[i]=steers[i];}
+    if(robot_debug::direction::kFour && robot_!=nullptr)robot_->registerDebugSteers(steers);
   }
   // 在非中断初始化阶段配置 CAN1；CAN2 使用第八项接口，所有 HAL 字段明确初始化。
   bool init() {
@@ -66,7 +67,7 @@ class RobotCanService {
     cycle_=(cycle_+1)%60;
   }
  private:
-  // 独立动力调试发送路径：只有左前转向ID1可非零，必须Working及最新私有会话许可同时成立。
+  // 独立动力调试：编译模式选择四转向或旧单电机路径，必须Working和最新私有会话同时许可。
   void tickDebugPower() {
     robot_->forceZeroForPreview();
     if(HAL_CAN_GetState(&hcan1)!=HAL_CAN_STATE_LISTENING || HAL_CAN_GetState(&hcan2)!=HAL_CAN_STATE_LISTENING) {
@@ -75,22 +76,36 @@ class RobotCanService {
     const uint32_t now=hello_world::tick::GetTickMs();
     if(!have_tx_clock_) {last_steer_ms_=last_wheel_ms_=last_axis_ms_=now;have_tx_clock_=true;}
     bool active=chassis_ && robot_->output().control && robot_->output().state.life==LifeState::Working;
-    if(active && now-last_steer_ms_>=20) {
+    const uint32_t last_target_ms=robot_debug::drive::kEnabled?last_wheel_ms_:last_steer_ms_;
+    if(active && (now-last_target_ms>=20 || (robot_debug::drive::kVector && now-last_steer_ms_>=20))) {
       robot_->stopDebugPower(robot_debug::Reason::Transmit);active=false;
     }
     uint8_t target[8]{};
-    if(active && (steers_[0]==nullptr || steers_[0]!=robot_->debugTarget() || steers_[0]->motor_info().id!=1)) {
+    auto *selected=robot_debug::drive::kEnabled?wheels_[0]:steers_[0];
+    if(active && (selected==nullptr || selected!=robot_->debugTarget() || selected->motor_info().id!=1)) {
       robot_->stopDebugPower(robot_debug::Reason::Configuration);active=false;
     }
-    if(active)active=robot_->fillDebugSteerFrame(target);
+    if(active)active=robot_->fillDebugTargetFrame(target);
+    uint8_t vector_steer[8]{};
+    if(active && robot_debug::drive::kVector && !robot_->fillVectorSteerFrame(vector_steer)) {
+      active=false;for(auto &v:target)v=0;
+    }
     const bool changed=!have_power_state_ || (was_power_active_ && !active);
     if(changed)abortOld();
     have_power_state_=true;was_power_active_=active;
     // 停止后的首帧立即归零；稳态仍周期发送零帧，绝不以“不发包”代替停车。
-    if(chassis_ && (active || changed || cycle_%20==0)) {
-      send(&hcan1,hello_world::motor::GM6020::GetTxId(1,hello_world::motor::InputType::kCurr),target);
+    if(robot_debug::drive::kEnabled) {
+      // 驱动和板间通信共用CAN2，驱动每4ms一帧；四转向同帧持续为零，停止转换立即发零。
+      if(chassis_ && (changed || cycle_%4==0))send(&hcan2,hello_world::motor::M3508::GetTxId(1),target);
+      if(chassis_ && robot_debug::drive::kVector && (active || changed || cycle_%20==0)) {
+        if(!active)for(auto &v:vector_steer)v=0;
+        send(&hcan1,hello_world::motor::GM6020::GetTxId(1,hello_world::motor::InputType::kCurr),vector_steer);
+      } else if(chassis_ && (changed || cycle_%20==0))sendGroup(&hcan1,steers_,false);
+    } else {
+      if(chassis_ && (active || changed || cycle_%20==0))
+        send(&hcan1,hello_world::motor::GM6020::GetTxId(1,hello_world::motor::InputType::kCurr),target);
+      if(chassis_ && (changed || cycle_%4==0))sendGroup(&hcan2,wheels_,false);
     }
-    if(chassis_ && (changed || cycle_%4==0))sendGroup(&hcan2,wheels_,false);
     if(changed || cycle_%4==1)sendAxis(robot_control::AxisAction::Disable);
     if(cycle_%3==2)SendBoardCommunication();
     cycle_=(cycle_+1)%60;

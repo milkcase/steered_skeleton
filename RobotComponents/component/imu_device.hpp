@@ -114,6 +114,8 @@ class Imu {
   float gyroBias(int axis) const { return estimator_.bias(axis); }
   // 返回当前 IMU 阶段，便于调试自检、静止校准、对齐和故障。
   ImuEstimator::State state() const { return estimator_.state(); }
+  // 透传估计器的实际微秒间隔，供运行健康镜像定位前台晚到或微秒时钟异常。
+  ImuEstimator::TimingDiagnostics timingDiagnostics() const {return estimator_.timingDiagnostics();}
   // 返回原驱动芯片初始化错误码；运行时 SPI 失败通过 Fault 状态表示。
   BMI088ErrState deviceError() const { return device_error_; }
   // 返回连续静止校准采样进度；不是采样总调用次数。

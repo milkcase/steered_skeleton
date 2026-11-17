@@ -26,7 +26,7 @@ void InitializeRobotRuntime() {
   robot->registerCommunication(GetGimbalChassisComm());
   robot->registerAxis(static_cast<hello_world::motor::DaMiao *>(GetMotorYaw()),GetGimbal(),GetPidMotorYaw());
   robot->registerDrive(GetDriveController());
-  robot->registerDebugTarget(GetMotorSteer(0));
+  robot->registerDebugTarget(robot_debug::drive::kEnabled?GetMotorWheel(0):GetMotorSteer(0));
   hello_world::motor::Motor *wheels[4],*steers[4];
   for(int i=0;i<4;++i) {wheels[i]=GetMotorWheel(i);steers[i]=GetMotorSteer(i);}
   CanService().registerDrive(wheels,steers);
@@ -46,7 +46,15 @@ extern "C" void RobotCommunicationTick() {
 void RunRobotControl() {
   if(!initialized)return;
   const float dt=clock.step(DWT->CYCCNT,HAL_GetTick(),SystemCoreClock,(DWT->CTRL&DWT_CTRL_CYCCNTENA_Msk)!=0);
+  // 仅观测控制执行耗时，采用已有DWT周期差；不据诊断镜像决定许可或延长任何超时。
+  const uint32_t started=DWT->CYCCNT;
   GetRobot()->update(dt);
+  const uint32_t cycles_per_us=SystemCoreClock/1000000u;
+  if(cycles_per_us!=0) {
+    const uint32_t elapsed_us=(DWT->CYCCNT-started)/cycles_per_us;
+    robot_runtime_health.control_us=elapsed_us;
+    if(elapsed_us>robot_runtime_health.max_control_us)robot_runtime_health.max_control_us=elapsed_us;
+  }
 }
 // main 的 USER CODE 主循环调用，BMI088 延时/超时都在可被控制中断抢占的前台执行。
 extern "C" void RobotSensorsPoll() {

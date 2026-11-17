@@ -192,7 +192,7 @@ bool robot::GimbalChassisComm::packLocal(uint8_t out[15]) const {
     const auto &d=chassis_data_;
     if(d.flags.debug_power) {
       const auto &s=d.session;
-      if(s.target!=1 || s.profile!=kPowerProfile || s.phase>3 || (s.phase>0 && s.phase<3 && s.token==0) ||
+      if(s.target!=kDebugTarget || s.profile!=kPowerProfile || s.phase>3 || (s.phase>0 && s.phase<3 && s.token==0) ||
           (d.state.life==robot::LifeState::Working && s.phase!=2) || !writeCommon(out,d.state,d.flags))return false;
       writeToken(out+2,s.token);out[6]=s.phase;out[7]=s.target;out[8]=s.profile>>8;out[9]=s.profile;
       return true;
@@ -211,11 +211,22 @@ bool robot::GimbalChassisComm::packLocal(uint8_t out[15]) const {
           d.flags.emergency_released!=(p.valid && p.right!=2))return false;
       if(!writeCommon(out,d.state,d.flags) || !writeNumber(out+2,p.steer,1000))return false;
       out[4]=p.right;out[5]=p.neutral?1:0;out[6]=p.other_neutral?1:0;out[7]=p.left;
+      // 双环方向版：第一页显式携带“中心”位，角度0仍可表示向前，不能用角度零代替回中。
+      // 复用后页空间传16位唯一参数编号，保持3页/CRC/超时与原版一致。
+      if(robot_debug::mode::kWideSession && d.flags.debug_power) {
+        out[4]=p.right|0x40|(p.neutral?0x80:0);
+        out[5]=(p.neutral?1:0)|(p.other_neutral?2:0)|(p.left<<2);
+        out[6]=d.session.profile>>8;out[7]=d.session.profile;
+      }
       if(d.flags.debug_power) {
         const auto &s=d.session;
-        if(s.target!=1 || s.profile!=kPowerProfile || s.phase>2 || (s.phase!=0 && s.token==0) ||
+        if(s.target!=kDebugTarget || s.profile!=kPowerProfile || s.phase>2 || (s.phase!=0 && s.token==0) ||
             (d.state.life==robot::LifeState::Working && s.phase!=2))return false;
-        writeToken(out+8,s.token);out[12]=s.phase;out[13]=s.target;out[14]=s.profile;
+        writeToken(out+8,s.token);out[12]=s.phase;out[13]=s.target;out[14]=robot_debug::mode::kWideSession?0:s.profile;
+        if(robot_debug::drive::kVector) {
+          if(!std::isfinite(p.magnitude) || p.magnitude<0 || p.magnitude>1 || (p.neutral && p.magnitude!=0))return false;
+          out[14]=static_cast<uint8_t>(std::round(p.magnitude*250));
+        }
       }
       return true;
     }
@@ -234,12 +245,28 @@ bool robot::GimbalChassisComm::unpackPeer(const uint8_t in[15]) {
     if(!d.flags.debug_power && in[14]!=0)return false;
     if(d.flags.debug_preview) {
       auto &p=d.preview;
+      if(robot_debug::mode::kWideSession && d.flags.debug_power) {
+        if(!readNumber(in+2,1000,p.steer) || std::fabs(p.steer)>1.001f ||
+            (in[4]&0x40)==0 || (in[4]&0x3C)!=0 || (in[4]&3)==0 || (in[5]&0xF0)!=0 ||
+            (in[5]>>2)==0 || (in[5]>>2)>3 || (!robot_debug::drive::kVector && in[14]!=0))return false;
+        p.right=in[4]&3;p.left=in[5]>>2;p.neutral=in[5]&1;p.other_neutral=in[5]&2;p.valid=d.flags.remote_valid;
+        if(p.neutral!=((in[4]&0x80)!=0) || (p.neutral && p.steer!=0))return false;
+        if(robot_debug::drive::kVector) {
+          if(in[14]>250 || (p.neutral && in[14]!=0) || (!p.neutral && p.other_neutral && in[14]==0))return false;
+          p.magnitude=in[14]/250.0f;
+        }
+        d.session.token=readToken(in+8);d.session.phase=in[12];d.session.target=in[13];d.session.profile=(in[6]<<8)|in[7];
+        if(d.session.target!=kDebugTarget || d.session.profile!=kPowerProfile || d.session.phase>2 ||
+            (d.session.phase!=0 && d.session.token==0) || (d.state.life==robot::LifeState::Working && d.session.phase!=2) ||
+            d.flags.emergency_released!=(p.valid && p.right!=2))return false;
+        gimbal_data_=d;return true;
+      }
       if(!readNumber(in+2,1000,p.steer) || std::fabs(p.steer)>1.001f ||
           (in[4]!=1 && in[4]!=2 && in[4]!=3) || in[5]>1 || in[6]>1 ||
           (in[7]!=1 && in[7]!=2 && in[7]!=3))return false;
       if(d.flags.debug_power) {
         d.session.token=readToken(in+8);d.session.phase=in[12];d.session.target=in[13];d.session.profile=in[14];
-        if(d.session.target!=1 || d.session.profile!=kPowerProfile || d.session.phase>2 ||
+        if(d.session.target!=kDebugTarget || d.session.profile!=kPowerProfile || d.session.phase>2 ||
             (d.session.phase!=0 && d.session.token==0) ||
             (d.state.life==robot::LifeState::Working && d.session.phase!=2))return false;
       } else for(int i=8;i<15;++i)if(in[i]!=0)return false;
@@ -260,7 +287,7 @@ bool robot::GimbalChassisComm::unpackPeer(const uint8_t in[15]) {
       d.session.token=readToken(in+2);d.session.phase=in[6];d.session.target=in[7];
       d.session.profile=(in[8]<<8)|in[9];
       for(int i=10;i<15;++i)if(in[i]!=0)return false;
-      if(d.session.target!=1 || d.session.profile!=kPowerProfile || d.session.phase>3 ||
+      if(d.session.target!=kDebugTarget || d.session.profile!=kPowerProfile || d.session.phase>3 ||
           (d.session.phase>0 && d.session.phase<3 && d.session.token==0) ||
           (d.state.life==robot::LifeState::Working && d.session.phase!=2))return false;
       chassis_data_=d;return true;
@@ -279,21 +306,30 @@ bool robot::GimbalChassisComm::previewContinuation(const ModuleState &state,cons
   const auto &old_flags=code_part_==CodePart::Chassis?gimbal_data_.flags:chassis_data_.flags;
   const auto &old_state=code_part_==CodePart::Chassis?gimbal_data_.state:chassis_data_.state;
   if(!old_flags.debug_preview || old_flags.debug_power!=flags.debug_power)return false;
+  // 转向正常回中进入Resurrection待杆，不撤销已经完成的会话；仍不授予任何新许可。
+  // 云台拥有本地DT7，C2G中的remote/released只是转述，拼包撤销时不能用转述空值取消其真实遥控准备。
+  const bool center_wait=robot_debug::mode::kResumable && flags.debug_power && state.life==robot::LifeState::Resurrection &&
+      flags.ready && flags.imu_ready && !flags.fault &&
+      (code_part_==CodePart::Gimbal?flags.yaw_feedback_valid:
+          (flags.pitch_feedback_valid && flags.remote_valid && flags.emergency_released));
   if(!flags.debug_power && (old_state.life!=state.life || old_state.chassis_mode!=state.chassis_mode ||
       old_state.gimbal_mode!=state.gimbal_mode || old_state.source!=state.source))return false;
   if(flags.debug_power) {
     if((old_state.life!=robot::LifeState::Dead && state.life==robot::LifeState::Dead) ||
-        (old_state.life==robot::LifeState::Working && state.life!=robot::LifeState::Working) ||
-        (old_flags.ready && !flags.ready) || (old_flags.command_valid && !flags.command_valid))return false;
+        (old_state.life==robot::LifeState::Working && state.life!=robot::LifeState::Working && !center_wait) ||
+        (old_flags.ready && !flags.ready) || (old_flags.command_valid && !flags.command_valid && !center_wait))return false;
     if(code_part_==CodePart::Chassis && gimbal_data_.preview.right==1) {
       float stick=0;
-      if(page0[4]!=1 || !readNumber(page0+2,1000,stick) ||
+      if(robot_debug::mode::kWideSession) {
+        // 新版向前的方向角也是0；只按有效回中位撤销，不会在方向跨0时误停。
+        if((page0[4]&0x43)!=0x41 || (!gimbal_data_.preview.neutral && (page0[4]&0x80)!=0))return false;
+      } else if(page0[4]!=1 || !readNumber(page0+2,1000,stick) ||
           (std::fabs(gimbal_data_.preview.steer)>0.05f && std::fabs(stick)<=0.05f))return false;
     }
   }
   // 任一既有安全条件从真变假，即在第一页撤销旧值；不等待后两页才能响应急停。
-  return !(old_flags.remote_valid && !flags.remote_valid) &&
-      !(old_flags.emergency_released && !flags.emergency_released) &&
+  return !(old_flags.remote_valid && !flags.remote_valid && !(center_wait && code_part_==CodePart::Gimbal)) &&
+      !(old_flags.emergency_released && !flags.emergency_released && !(center_wait && code_part_==CodePart::Gimbal)) &&
       !(old_flags.imu_ready && !flags.imu_ready) &&
       !(old_flags.yaw_feedback_valid && !flags.yaw_feedback_valid) &&
       !(old_flags.pitch_feedback_valid && !flags.pitch_feedback_valid);
@@ -319,6 +355,12 @@ void robot::GimbalChassisComm::recordRxRejection(RxFailure reason,const uint8_t 
     event.page=frame[0]&15;event.seq=frame[1];
     // 只有第一页的这两个字节才表示状态与安全位，其他页保留零避免误读。
     if(event.page==0) {event.state_byte=frame[2];event.flags_byte=frame[3];}
+    // 只有已过CRC和公共字段检查的安全第一页才解释拨杆/回中位；坏帧不能伪装为正常回中。
+    if(reason==RxFailure::SafetyPage && event.page==0 && code_part_==CodePart::Chassis &&
+        robot_debug::mode::kWideSession && (event.state_byte&0xC0)==0xC0 &&
+        (frame[6]&0x40)!=0 && (frame[6]&0x3C)==0 && (frame[6]&3)!=0) {
+      event.control_signal_valid=1;event.right=frame[6]&3;event.neutral=(frame[6]&0x80)!=0;
+    }
   }
   rx_diagnostics_.last_rejection=event;
 }

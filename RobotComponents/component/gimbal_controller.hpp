@@ -6,7 +6,7 @@
 #include "motor_DaMiao.hpp"
 
 namespace robot {
-// 两板使用同一位置环实现，但每个对象仅绑定本板负责的一轴，不重复发送控制命令。
+// 两板使用相同的位置/速度串级双环，每个对象仅绑定本板负责的一轴。
 class Gimbal {
  public:
   enum class Axis { Yaw, Pitch };
@@ -18,6 +18,8 @@ class Gimbal {
     float pitch_max_rad=0.0f;
     float pitch_guard_rad=0.03f;       // 接近软件边界时阻止继续向外的力矩。
     float max_dt_s=0.010f;
+    float max_speed_rad_s=0.0f;         // 外环输出上限，单位rad/s；不能用力矩上限替代。
+    hello_world::pid::Pid::Params speed_pid{}; // 内环以电机速度反馈计算力矩(Nm)，默认停用。
   };
   struct Safety {
     bool remote_valid=false;       // 有效且未过期的 DBUS/板间遥控输入。
@@ -33,6 +35,7 @@ class Gimbal {
     float torque_nm=0.0f;   // 写入本地电机对象的力矩，不等于已发送 CAN 帧。
     bool limited=false;    // 目标或边界力矩被限制。
     bool valid=false;      // false 时不得沿用目标，实际输入已尽可能归零。
+    float target_speed_rad_s=0.0f,speed_error_rad_s=0.0f;
   };
 
   // 绑定本板一轴、PID 和达妙对象；仅初始化内存中的零输入，不调用使能或 CAN 发送。
@@ -41,13 +44,14 @@ class Gimbal {
 
   // 保存并检查位置环限制，清积分与目标历史；未知 pitch 范围保持停用。
   bool configure(const Params &params) {
-    stop();params_=params;
+    stop();params_=params;speed_pid_.configure(params.speed_pid);
     configured_=(axis_==Axis::Yaw || axis_==Axis::Pitch) &&
         std::isfinite(params.max_torque_nm) && params.max_torque_nm>=0 &&
         std::isfinite(params.max_target_rate_rad_s) && params.max_target_rate_rad_s>=0 &&
         std::isfinite(params.pitch_min_rad) && std::isfinite(params.pitch_max_rad) &&
         std::isfinite(params.pitch_guard_rad) && params.pitch_guard_rad>=0 &&
-        std::isfinite(params.max_dt_s) && params.max_dt_s>0;
+        std::isfinite(params.max_dt_s) && params.max_dt_s>0 &&
+        std::isfinite(params.max_speed_rad_s) && params.max_speed_rad_s>=0 && speed_pid_.configured();
     if(axis_==Axis::Pitch && params.pitch_limits_confirmed) {
       configured_=configured_ && params.pitch_min_rad> -kPi && params.pitch_max_rad<kPi &&
           params.pitch_min_rad<params.pitch_max_rad &&
@@ -68,20 +72,16 @@ class Gimbal {
         !motor_->is_enabled() || motor_->get_input_type()!=hello_world::motor::InputType::kTorq)
       return fail();
     if(axis_==Axis::Pitch && !params_.pitch_limits_confirmed)return fail();
-    const auto &pc=pid_->params();
-    const float driver_limit=motor_->motor_info().torq_input_lim;
     // 约束 PID 不超过本模块和驱动限幅，避免下游截断而上游积分继续堆积。
-    if(!pid_->configured() || pc.kp<0 || pc.ki<0 || pc.kd<0 || pc.output_limit<=0 ||
-        pc.output_limit>params_.max_torque_nm || !std::isfinite(driver_limit) ||
-        driver_limit<=0 || params_.max_torque_nm>driver_limit ||
-        (axis_==Axis::Yaw?std::fabs(pc.error_period-2*kPi)>0.00001f:pc.error_period!=0))return fail();
+    if(!loopsReady())return fail();
     const float measured=motor_->angle();
-    if(!std::isfinite(measured))return fail();
+    const float measured_speed=motor_->vel();
+    if(!std::isfinite(measured) || !std::isfinite(measured_speed))return fail();
     // pitch 反馈已越界时不自动拉回，直接撤销控制；需要检查实物/零点后再恢复。
     if(axis_==Axis::Pitch && (measured<params_.pitch_min_rad || measured>params_.pitch_max_rad))return fail();
     if(have_state_ && (state.chassis_mode!=previous_state_.chassis_mode ||
         state.gimbal_mode!=previous_state_.gimbal_mode)) {
-      pid_->reset();have_target_=false;
+      pid_->reset();speed_pid_.reset();have_target_=false;
     }
     Result next;
     float goal=axis_==Axis::Yaw?wrap(requested.yaw):requested.pitch;
@@ -99,13 +99,17 @@ class Gimbal {
     next.target_rad=axis_==Axis::Yaw?wrap(base+step):clamp(base+step,params_.pitch_min_rad,params_.pitch_max_rad);
     next.error_rad=axis_==Axis::Yaw?wrap(next.target_rad-wrap(measured)):next.target_rad-measured;
     if(!std::isfinite(next.target_rad) || !std::isfinite(next.error_rad))return fail();
-    next.torque_nm=pid_->updateError(next.error_rad,dt_s);
-    if(!pid_->lastUpdateOk() || !std::isfinite(next.torque_nm))return fail();
+    // 外环将角度误差变为目标速度，内环必须减去实际电机速度，不能直接把外环当力矩。
+    next.target_speed_rad_s=pid_->updateError(next.error_rad,dt_s);
+    if(!pid_->lastUpdateOk())return fail();
+    next.speed_error_rad_s=next.target_speed_rad_s-measured_speed;
+    next.torque_nm=speed_pid_.update(next.target_speed_rad_s,measured_speed,dt_s);
+    if(!speed_pid_.lastUpdateOk() || !std::isfinite(next.torque_nm))return fail();
     // 软件边界附近不得向外施力；清积分，避免目标仍在边界外时累积堵转力矩。
     if(axis_==Axis::Pitch &&
         ((measured>=params_.pitch_max_rad-params_.pitch_guard_rad && next.torque_nm>0) ||
          (measured<=params_.pitch_min_rad+params_.pitch_guard_rad && next.torque_nm<0))) {
-      next.torque_nm=0;next.limited=true;pid_->reset();
+      next.torque_nm=0;next.target_speed_rad_s=0;next.limited=true;pid_->reset();speed_pid_.reset();
     }
     next.torque_nm=clamp(next.torque_nm,-params_.max_torque_nm,params_.max_torque_nm);
     if(motor_->setInput(next.torque_nm)!=hello_world::motor::Status::kOk)return fail();
@@ -118,6 +122,7 @@ class Gimbal {
   void stop() {
     result_={};have_target_=false;have_state_=false;previous_target_=0;
     if(pid_!=nullptr)pid_->reset();
+    speed_pid_.reset();
     if(motor_!=nullptr)motor_->setInput(0.0f);
   }
   // 返回当前轴标识，供调度决定使用 yaw 还是 pitch 的目标/反馈。
@@ -128,6 +133,18 @@ class Gimbal {
   const Params &params() const { return params_; }
   // 查询限制参数是否数值合法；未知 pitch 限位或零动力上限依然不允许更新。
   bool configured() const { return configured_; }
+  // 同时验证外环速度单位、内环力矩单位及驱动限幅，供运行时自检和真正更新共用。
+  bool loopsReady() const {
+    if(!configured_ || pid_==nullptr || motor_==nullptr)return false;
+    const auto &p=pid_->params();const auto &s=speed_pid_.params();
+    const float driver_limit=motor_->motor_info().torq_input_lim;
+    return pid_->configured() && p.kp>=0 && p.ki>=0 && p.kd>=0 && p.output_limit>0 &&
+        p.output_limit<=params_.max_speed_rad_s && params_.max_speed_rad_s>0 &&
+        (axis_==Axis::Yaw?std::fabs(p.error_period-2*kPi)<0.00001f:p.error_period==0) &&
+        speed_pid_.configured() && s.kp>0 && s.ki>=0 && s.kd>=0 && s.error_period==0 &&
+        s.output_limit>0 && s.output_limit<=params_.max_torque_nm &&
+        std::isfinite(driver_limit) && driver_limit>0 && params_.max_torque_nm<=driver_limit;
+  }
 
  private:
   // 将有限角度归一化到 [-π,π)，用于 yaw 的目标和误差，不进行多圈累计。
@@ -149,6 +166,7 @@ class Gimbal {
   Axis axis_;
   hello_world::motor::DaMiao *motor_=nullptr;
   hello_world::pid::Pid *pid_=nullptr;
+  hello_world::pid::Pid speed_pid_; // 两轴各自的内环历史，绝不共享积分。
   Params params_{};
   Result result_{};
   ModuleState previous_state_{};

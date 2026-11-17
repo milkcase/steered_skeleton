@@ -14,6 +14,8 @@ class ImuEstimator {
   struct SampleDiagnostics {
     float acc[3],gyro[3],acc_norm,gyro_norm;
   };
+  // 时序只读记录；超期仍锁存Fault，记录用于区分采样晚到和传感器/数值故障。
+  struct TimingDiagnostics {uint32_t last_interval_us=0,max_interval_us=0;bool interval_fault=false;};
   struct Params {
     uint32_t calibration_samples = 2000;
     uint32_t alignment_samples = 500;
@@ -39,6 +41,7 @@ class ImuEstimator {
     for(int i=0;i<3;++i)last_acc_[i]=last_gyro_[i]=0;
     last_acc_norm_=last_gyro_norm_=std::numeric_limits<float>::quiet_NaN();
     params_ = params;
+    timing_diagnostics_={};
     const float positive[] = {params.gravity, params.gravity_tolerance, params.stationary_gyro,
         params.gyro_std_limit, params.acc_std_limit, params.alignment_gyro,
         params.alignment_gravity_error};
@@ -84,9 +87,11 @@ class ImuEstimator {
     if (!std::isfinite(an) || !std::isfinite(gn) || an<0.1f || an>35.0f || gn>17.0f) return fault();
     if (timed_) {
       const uint32_t elapsed=now_us-last_us_;
+      timing_diagnostics_.last_interval_us=elapsed;
+      if(elapsed>timing_diagnostics_.max_interval_us)timing_diagnostics_.max_interval_us=elapsed;
       // 重复或过早调用不累计样本；过晚调用不能按固定采样频率继续积分。
       if (elapsed<params_.period_us*3/4) return false;
-      if (elapsed>params_.period_us*5/4) return fault();
+      if (elapsed>params_.period_us*5/4) {timing_diagnostics_.interval_fault=true;return fault();}
     }
     timed_=true; last_us_=now_us;
     const bool still=std::fabs(an-params_.gravity)<=params_.gravity_tolerance &&
@@ -136,6 +141,8 @@ class ImuEstimator {
   }
   // 返回当前阶段，便于上层区分未初始化、校准、对齐、可用和故障。
   State state() const { return state_; }
+  // 返回原始采样间隔和锁存时序故障，不修改时间戳或恢复就绪。
+  TimingDiagnostics timingDiagnostics() const {return timing_diagnostics_;}
   // 按值读取最近一次样本诊断，供核验和观察使用；修改返回副本不影响内部记录。
   SampleDiagnostics sampleDiagnostics() const {
     return {{last_acc_[0],last_acc_[1],last_acc_[2]},
@@ -155,6 +162,7 @@ class ImuEstimator {
   float yaw(uint32_t now_us) const { return ready(now_us)?angles_[2]:0; }
 
  private:
+  TimingDiagnostics timing_diagnostics_{};
   // 检查三轴向量是否非空且各分量均为有限数。
   static bool finiteVector(const float *v) {
     return v && std::isfinite(v[0]) && std::isfinite(v[1]) && std::isfinite(v[2]);

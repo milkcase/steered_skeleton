@@ -1,3 +1,11 @@
+/*
+ * @Author: milkcase choose68@163.com
+ * @Date: 2026-11-15 20:11:20
+ * @LastEditors: milkcase choose68@163.com
+ * @LastEditTime: 2026-11-15 20:43:22
+ * @FilePath: \Chassisd:\RM\steered_project\steered_skeleton\RobotComponents\component\motor_debug_tuning.hpp
+ * @Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+ */
 #ifndef STEERED_MOTOR_DEBUG_TUNING_HPP_
 #define STEERED_MOTOR_DEBUG_TUNING_HPP_
 #include <cstdint>
@@ -5,12 +13,12 @@
 // ==================== 本轮只调整下面两项 ====================
 // 位置环P，单位A/rad；允许0.5～8.0，每档0.5。I、D仍为0，不在本轮开放。
 #ifndef ROBOT_MOTOR_DEBUG_KP
-#define ROBOT_MOTOR_DEBUG_KP 5.0f
+#define ROBOT_MOTOR_DEBUG_KP 8.0f
 #endif
 // 指令电流绝对上限，单位A；允许0.025～0.200，每档0.025。
 // 从0.050开始，需增加时每次只增加一档并单独验收；这些值不是已证明足以驱动或机械安全的保证。
 #ifndef ROBOT_MOTOR_DEBUG_CURRENT_LIMIT_A
-#define ROBOT_MOTOR_DEBUG_CURRENT_LIMIT_A 0.050f
+#define ROBOT_MOTOR_DEBUG_CURRENT_LIMIT_A 0.100f
 #endif
 // 修改后两板都要重新构建并烧录；不在Ozone中改变量或绕过配置检查。
 

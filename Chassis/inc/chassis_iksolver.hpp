@@ -11,6 +11,7 @@ class ChassisIkSolver {
     float alignment_tolerance_rad = 0.10f;  // 驱动前允许的实际舵角与最终目标误差。
     float zero_speed_m_s = 0.0001f;      // 零速死区，避免 atan2(0,0) 导致舵角乱跳。
     float max_dt_s = 0.010f;            // 异常长周期清历史，不将旧目标继续使用。
+    bool project_drive_speed = false; // 逐轮连续投影，不整体锁零。
   };
   struct BodyMotion {
     float vx = 0.0f;  // 车体系 x前，m/s；与云台系指令使用不同类型。

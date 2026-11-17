@@ -25,8 +25,11 @@ robot::ModuleState working() {
       robot::ChassisMode::Separate,robot::GimbalMode::JointPosition};
 }
 // 仅供模拟测试选择非零限制与已知 pitch 范围，不能用于实车。
-Gimbal::Params limits() { return {3,1000,true,-0.5f,0.5f,0.05f,0.01f}; }
-// 按轴配置真实 PID，角度回绕仅用于 yaw，输出单位为 N·m。
+Gimbal::Params limits() {
+  Gimbal::Params p{3,1000,true,-0.5f,0.5f,0.05f,0.01f};
+  p.max_speed_rad_s=3;p.speed_pid={.kp=1,.output_limit=3};return p;
+}
+// 按轴配置真实外环PID，角度回绕仅用于yaw，输出单位rad/s。
 bool configurePid(Pid &pid,bool yaw,float kp=2,float ki=0,float kd=0) {
   return pid.configure({kp,ki,kd,1,3,0.01f,yaw?2*pi:0});
 }
@@ -40,6 +43,11 @@ extern "C" int run_tests() {
   motor.position=359*pi/180;
   CHECK(yaw.update({pi/180,0},state,safety));
   CHECK(near(yaw.result().error_rad,2*pi/180) && motor.input>0 && near(motor.input,4*pi/180));
+  // 位置相同而正向速度过大时，内环必须输出反向力矩；两环不能退化为位置P。
+  yaw.stop();motor.position=0;motor.velocity=0.5f;
+  CHECK(yaw.update({0.1f,0},state,safety));
+  CHECK(near(yaw.result().target_speed_rad_s,0.2f) && near(motor.input,-0.3f));
+  motor.velocity=0;
   yaw.stop();motor.position=pi/180;
   CHECK(yaw.update({359*pi/180,0},state,safety));
   CHECK(near(yaw.result().error_rad,-2*pi/180) && motor.input<0);
@@ -120,7 +128,7 @@ extern "C" int run_tests() {
   CHECK(field_pitch.configured() && params.pitch_limits_confirmed);
   CHECK(!field_pitch.update({0,0.1f},state,safety) && pitch_motor.input==0);
   // 仅在模拟器副本中给出非零上限，核对选定边界的钳位、向外归零与越界拒绝控制。
-  params.max_torque_nm=3;params.max_target_rate_rad_s=1000;
+  params.max_torque_nm=3;params.max_target_rate_rad_s=1000;params.max_speed_rad_s=3;params.speed_pid=limits().speed_pid;
   CHECK(field_pitch.configure(params));
   CHECK(field_pitch.update({0,2},state,safety));
   CHECK(near(field_pitch.result().target_rad,0.515f) && field_pitch.result().limited);
@@ -153,7 +161,7 @@ extern "C" int run_tests() {
     for(int i=0;i<5000;++i) {
       CHECK(loop.update(axis==0?robot::GimbalMotion{goal,0}:robot::GimbalMotion{0,goal},state,safety));
       CHECK(std::fabs(plant.input)<=3);
-      velocity+=0.001f*(plant.input-2*velocity);plant.position+=0.001f*velocity;
+      velocity+=0.001f*(plant.input-2*velocity);plant.position+=0.001f*velocity;plant.velocity=velocity;
       if(plant.position>peak)peak=plant.position;
     }
     CHECK(near(plant.position,goal,0.003f));CHECK(peak<goal+0.01f);

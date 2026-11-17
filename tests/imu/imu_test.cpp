@@ -311,7 +311,9 @@ extern "C" int run_tests() {
   CHECK(e.recalibrate());for(int i=0;i<30;++i,t+=1000)e.pushSample(acc,gyro,t);
   CHECK(e.ready(t) && near(e.roll(t),0) && near(e.pitch(t),0));
   CHECK(!e.pushSample(acc,gyro,t+10000) && e.state()==ImuEstimator::State::Fault);
+  CHECK(e.timingDiagnostics().interval_fault && e.timingDiagnostics().last_interval_us==11000);
   CHECK(!e.pushSample(acc,gyro,t+11000));
+  CHECK(e.timingDiagnostics().last_interval_us==11000);
   CHECK(e.recalibrate());gyro[0]=std::numeric_limits<float>::quiet_NaN();
   CHECK(!e.pushSample(acc,gyro,t) && !e.ready(t));gyro[0]=0;
   auto invalid=cfg;invalid.calibration_samples=1;CHECK(!e.begin(invalid));

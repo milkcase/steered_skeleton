@@ -98,6 +98,7 @@ bool ChassisIkSolver::solve(const robot::ChassisMotion &command,float delta_rad,
       if(std::fabs(wrapAngle(goals[i]-measured[i]))>kPi/2) {
         goals[i]=wrapAngle(goals[i]+kPi);speeds[i]=-speeds[i];
       }
+      if(limits_.project_drive_speed)speeds[i]*=std::cos(wrapAngle(goals[i]-measured[i]));
       if(std::fabs(wrapAngle(goals[i]-measured[i]))>limits_.alignment_tolerance_rad)
         all_aligned=false;
     }
@@ -114,7 +115,7 @@ bool ChassisIkSolver::solve(const robot::ChassisMotion &command,float delta_rad,
   const float scale=peak>limits_.max_wheel_speed_rad_s?limits_.max_wheel_speed_rad_s/peak:1.0f;
   for(int i=0;i<4;++i) {
     // 任一运动轮组未对准最终舵角，四个驱动轮统一暂缓，转向目标仍可逐步接近。
-    next.wheels[i].speed_rad_s=all_aligned?speeds[i]*scale:0.0f;
+    next.wheels[i].speed_rad_s=(limits_.project_drive_speed || all_aligned)?speeds[i]*scale:0.0f;
     if(!std::isfinite(next.wheels[i].speed_rad_s))return fail();
     previous_steer_[i]=next.wheels[i].steer_rad;
   }
