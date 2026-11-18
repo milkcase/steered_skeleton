@@ -103,7 +103,7 @@
 #endif
 // 位置环I
 #ifndef ROBOT_YAW_POSITION_KI
-#define ROBOT_YAW_POSITION_KI 0.0f
+#define ROBOT_YAW_POSITION_KI 1.0f
 #endif
 // 位置环D
 #ifndef ROBOT_YAW_POSITION_KD
@@ -111,7 +111,7 @@
 #endif
 // 位置环积分输出上限，rad/s
 #ifndef ROBOT_YAW_POSITION_INTEGRAL_RAD_S
-#define ROBOT_YAW_POSITION_INTEGRAL_RAD_S 0.0f
+#define ROBOT_YAW_POSITION_INTEGRAL_RAD_S 30.0f
 #endif
 // 位置外环输出给速度内环的目标转速上限，rpm
 #ifndef ROBOT_YAW_POSITION_SPEED_RPM
@@ -123,7 +123,7 @@
 #endif
 // 速度环I；pitch悬停需要用积分补偿持续负载，仍须现场整定
 #ifndef ROBOT_YAW_SPEED_KI
-#define ROBOT_YAW_SPEED_KI 0.0f
+#define ROBOT_YAW_SPEED_KI 0.5f
 #endif
 // 速度环D
 #ifndef ROBOT_YAW_SPEED_KD
@@ -154,11 +154,11 @@
 #endif
 // 位置环P；角度误差rad→目标速度rad/s
 #ifndef ROBOT_PITCH_POSITION_KP
-#define ROBOT_PITCH_POSITION_KP 15.0f
+#define ROBOT_PITCH_POSITION_KP 20.0f
 #endif
 // 位置环I
 #ifndef ROBOT_PITCH_POSITION_KI
-#define ROBOT_PITCH_POSITION_KI 0.0f
+#define ROBOT_PITCH_POSITION_KI 1.0f
 #endif
 // 位置环D
 #ifndef ROBOT_PITCH_POSITION_KD
@@ -166,7 +166,7 @@
 #endif
 // 位置环积分输出上限，rad/s
 #ifndef ROBOT_PITCH_POSITION_INTEGRAL_RAD_S
-#define ROBOT_PITCH_POSITION_INTEGRAL_RAD_S 0.0f
+#define ROBOT_PITCH_POSITION_INTEGRAL_RAD_S 20.0f
 #endif
 // 位置外环输出给速度内环的目标转速上限，rpm
 #ifndef ROBOT_PITCH_POSITION_SPEED_RPM
@@ -178,15 +178,15 @@
 #endif
 // 速度环I；pitch悬停需要用积分补偿持续负载，仍须现场整定
 #ifndef ROBOT_PITCH_SPEED_KI
-#define ROBOT_PITCH_SPEED_KI 0.0f
+#define ROBOT_PITCH_SPEED_KI 0.5f
 #endif
 // 速度环D
 #ifndef ROBOT_PITCH_SPEED_KD
-#define ROBOT_PITCH_SPEED_KD 0.0f
+#define ROBOT_PITCH_SPEED_KD 0.01f
 #endif
 // 最终力矩绝对上限，Nm；不是恒力矩输出，不保证足以悬停
 #ifndef ROBOT_PITCH_TORQUE_NM
-#define ROBOT_PITCH_TORQUE_NM 2.0f
+#define ROBOT_PITCH_TORQUE_NM 5.0f
 #endif
 // 速度环积分输出上限，Nm
 #ifndef ROBOT_PITCH_SPEED_INTEGRAL_NM
