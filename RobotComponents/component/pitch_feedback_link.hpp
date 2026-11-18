@@ -33,7 +33,10 @@ class Link {
       for(int p=0;p<kPages;++p) {
         auto *f=tx_[p];f[0]=flags;f[1]=sequence_;f[2]=p;
         uint32_t word=0;const float v=valid?values[p]:0;std::memcpy(&word,&v,4);
-        for(int j=0;j<4;++j)f[3+j]=word>>(8*j);f[7]=crc(f);
+        for(int j=0;j<4;++j) {
+          f[3+j]=word>>(8*j);
+        }
+        f[7]=crc(f);
       }
       tx_start_=now;frozen_=true;
     }

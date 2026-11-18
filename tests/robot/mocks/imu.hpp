@@ -5,7 +5,7 @@ struct BMI088HWConfig {};
 // 仅替代 SPI 采样；真实 IMU 的算法与超时已在第四项测试，本项模拟其就绪/失效结果。
 class Imu {
  public:
-  bool ready=true,allow_restart=false;float heading=0;
+  bool ready=true,allow_restart=false;float heading=0,turn_rate=0;
   uint32_t recovery_updates=0;
   // 记录测试配置，不访问 SPI/GPIO。
   bool init(const BMI088HWConfig &,const float *) {return true;}
@@ -22,6 +22,8 @@ class Imu {
   bool isReady() const {return ready;}
   // 提供本板相对航向，单位 rad。
   float yaw() const {return heading;}
+  // 测试可注入底盘的转速扰动，默认保持静止。
+  float bodyYawRate() const {return turn_rate;}
   // 运行健康镜像使用的测试状态，沿用真实估计器Ready=3、Fault=4的编号。
   uint32_t state() const {return ready?3u:4u;}
   struct Timing {uint32_t last_interval_us=1000,max_interval_us=1000;bool interval_fault=false;};

@@ -91,8 +91,10 @@ class GimbalChassisComm {
      */
     ModuleState state{};
     Flags flags{};
-    ChassisMotion motion{};   // 云台系 vx/vy(m/s)、w(rad/s)。
+    ChassisMotion motion{};   // 云台系 vx/vy(m/s)。Main由底盘生成自转速率，因此线上w为零。
     float yaw_target=0.0f;    // 发给底盘执行的 yaw 关节目标 rad。
+    float world_yaw_target=0.0f; // 底盘IMU参考系中的yaw目标，分离和跟随时在底盘就地换算。
+    bool world_yaw_target_valid=false;
     GimbalMotion feedback{};  // pitch 为本板反馈；yaw 若为转述，不能当成本板独立测量。
     // 零输出预演使用独立语义；标记置位时线上不再把这些字节解释成正常运动指令。
     struct PreviewRemote {
@@ -105,6 +107,10 @@ class GimbalChassisComm {
   };
 
   GimbalChassisComm(CodePart code_part, uint32_t tx_id, uint32_t rx_id);
+  // 分离和跟随用同一对地目标字段；小陀螺继续使用原有相对角度字段。
+  static constexpr bool supportsWorldYawTarget(ChassisMode mode) {
+    return mode==ChassisMode::Separate || mode==ChassisMode::Follow;
+  }
 
   /* 编码己方帧：把本地 ChassisData / GimbalData 打包进 8 字节。 */
   void encode(uint8_t tx_data[8]);

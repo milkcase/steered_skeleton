@@ -117,10 +117,10 @@ extern "C" void CommTaskInit() {++comm_calls;}
 extern "C" void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *);
 
 // 构造明确的拨杆与五通道 DBUS 字节，再交给提供的 DT7 解码器。
-void setRemote(uint8_t right,uint16_t pitch=1024,uint16_t steer=1024,uint16_t forward=1024) {
-  uint16_t c[5]={1024,pitch,steer,forward,1024};uint8_t d[18]{};
+void setRemote(uint8_t right,uint16_t pitch=1024,uint16_t steer=1024,uint16_t forward=1024,uint8_t left=1,uint16_t wheel=1024) {
+  uint16_t c[5]={1024,pitch,steer,forward,wheel};uint8_t d[18]{};
   d[0]=c[0];d[1]=(c[0]>>8)|(c[1]<<3);d[2]=(c[1]>>5)|(c[2]<<6);
-  d[3]=c[2]>>2;d[4]=(c[2]>>10)|(c[3]<<1);d[5]=(c[3]>>7)|(right<<4)|(1<<6);
+  d[3]=c[2]>>2;d[4]=(c[2]>>10)|(c[3]<<1);d[5]=(c[3]>>7)|(right<<4)|(left<<6);
   d[16]=c[4];d[17]=c[4]>>8;remote.decode(d);
 }
 // 正参数仅用于测试，不改写未确认的实车配置。

@@ -38,8 +38,9 @@ class ChassisIkSolver {
   void reset();
   // 输入云台系速度、文档定义的 delta、四个有效舵角反馈及周期，生成目标而不发送。
   // 现场已确认delta使用底盘本板yaw关节角：枪口朝车头为0，从上往下看左转为正。
+  // 小陀螺传入本周期算出的轮速上限；零表示沿用配置上限。
   bool solve(const robot::ChassisMotion &command, float delta_rad,
-             const float current_steer_rad[4], float dt_s = 0.001f);
+             const float current_steer_rad[4], float dt_s = 0.001f, float wheel_limit_rad_s = 0.0f);
   // 返回最近结果的只读引用；只有 valid=true 时才可将其作为闭环目标。
   const Result &result() const { return result_; }
   // 返回当前限幅配置供整定记录，不能通过此引用直接修改参数。

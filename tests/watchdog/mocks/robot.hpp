@@ -8,8 +8,8 @@ class Robot {
   TestOutput out{};bool transport=true,safe=true;
   // 提供当前动作状态，允许注入“非 Working 却有输出”的软件故障。
   const TestOutput &output() const {return out;}
-  // 模拟异步急停/离线时最终检查失败。
-  bool controlStillSafe() {return safe;}
+  // 模拟最终复查，异步急停或离线时立即清除输出。
+  bool recheckActiveControl() {if(!safe)stop();return safe;}
   // 模拟真实统一停止语义，归零本板全部记录输入。
   void stop() {
     out={};yaw.input=pitch.input=0;

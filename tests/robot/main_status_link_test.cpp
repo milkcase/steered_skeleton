@@ -51,7 +51,7 @@ void publishState(Comm &comm,bool chassis,const robot_control::ControlOutput &ou
 }
 // 两个真实Supervisor经3ms分页错相通信：右下→右中回中→右上，不能在页间互相撤销准备。
 int coupledSupervisors() {
-  robot_control::Params p;p.remote_mapping_confirmed=true;p.separate_only=true;p.start_level_pitch=true;
+  robot_control::Params p;p.remote_mapping_confirmed=true;p.allow_spin=false;p.start_level_pitch=true;
   p.max_vx_m_s=p.max_vy_m_s=p.max_w_rad_s=1;p.yaw_rate_rad_s=p.pitch_rate_rad_s=0.5f;
   p.follow={.kp=1,.output_limit=1,.error_period=6.283185307179586f};
   robot_control::Supervisor base(robot_control::Board::Chassis,p),cloud(robot_control::Board::Gimbal,p);

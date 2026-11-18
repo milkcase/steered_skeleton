@@ -121,6 +121,26 @@ extern "C" int run_tests() {
   CHECK(near(gd.yaw_target,-1.11116f) && near(gd.feedback.yaw,1.99996f));
   CHECK(!c.readPeer(cd) && cd.target.yaw==0);CHECK(!g.readPeer(gd) && gd.motion.vx==0);
 
+  // 分离和跟随的扩展目标只在完整快照提交，标记错误时不能沿用旧目标。
+  {
+    Comm sender(Comm::CodePart::Gimbal,0x211,0x210),receiver(Comm::CodePart::Chassis,0x210,0x211);
+    activateG(sender);
+    auto &d=sender.gimbal_data();
+    d.state.chassis_mode=robot::ChassisMode::Follow;
+    d.flags.yaw_feedback_valid=false;
+    d.world_yaw_target=-2.35f;d.world_yaw_target_valid=true;
+    pages(sender,frame);
+    receiver.decode(frame[0]);receiver.decode(frame[1]);
+    CHECK(!receiver.readPeer(gd));
+    receiver.decode(frame[2]);CHECK(receiver.readPeer(gd));
+    CHECK(gd.world_yaw_target_valid && near(gd.world_yaw_target,-2.35f) && gd.feedback.yaw==0);
+    d.state.chassis_mode=robot::ChassisMode::Separate;
+    d.world_yaw_target=1.15f;pages(sender,frame);deliver(receiver,frame);
+    CHECK(receiver.readPeer(gd) && gd.world_yaw_target_valid && near(gd.world_yaw_target,1.15f));
+    pages(sender,frame);frame[2][6]=2;frame[2][7]=crc(frame[2]);deliver(receiver,frame);
+    CHECK(!receiver.readPeer(gd) && !gd.world_yaw_target_valid);
+  }
+
   // 发送期间字段变化不混入本轮；下一轮才发布新值。
   uint8_t frozen[3][8];c.encode(frozen[0]);c.chassis_data().target.pitch=0.8f;
   c.encode(frozen[1]);c.encode(frozen[2]);deliver(g,frozen);g.readPeer(cd);CHECK(near(cd.target.pitch,-0.22226f));

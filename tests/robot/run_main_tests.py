@@ -29,6 +29,9 @@ def main():
             print('电机先禁用反馈：首因锁存、全组归零、右下保留：',result)
             if result:raise SystemExit(result)
             for name,extra in [('dual-main-runtime',[]),
+                    ('dual-main-follow',['TEST_DUAL_FOLLOW','ROBOT_SPIN_TARGET_RPM=45.0f','ROBOT_SPIN_MAX_RPM=45.0f',
+                        'ROBOT_SPIN_ACCEL_RPM_S=60.0f','ROBOT_SPIN_TRANSLATION_OFFSET_DEG=-8.0f','ROBOT_DRIVE_TARGET_SPEED_RPM=100.0f',
+                        'ROBOT_YAW_AIM_RPM=30.0f','ROBOT_YAW_POSITION_SPEED_RPM=60.0f','ROBOT_YAW_TARGET_RATE_RPM=90.0f']),
                     ('dual-main-pitch-outside',['TEST_DUAL_PITCH_OUTSIDE','ROBOT_PITCH_POSITION_LIMIT_ENABLED=1']),
                     ('dual-main-pitch-free',['TEST_DUAL_PITCH_FREE','ROBOT_PITCH_POSITION_LIMIT_ENABLED=0'])]:
                 result=context['run'](name,context['runtime_sources'],context['runtime_includes'],

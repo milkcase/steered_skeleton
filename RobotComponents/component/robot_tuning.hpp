@@ -139,7 +139,7 @@
 #endif
 // 本轴位置目标变化率，rpm；限制进入Working回水平及瞄准目标的追随速度
 #ifndef ROBOT_YAW_TARGET_RATE_RPM
-#define ROBOT_YAW_TARGET_RATE_RPM (ROBOT_YAW_AIM_RPM*2.0f)
+#define ROBOT_YAW_TARGET_RATE_RPM (ROBOT_YAW_AIM_RPM*3.0f)
 #endif
 // 实际关节独立超速保护，rpm；必须严格高于位置环输出速度上限
 #ifndef ROBOT_YAW_TRIP_RPM
@@ -263,3 +263,49 @@ static_assert(ROBOT_PITCH_POSITION_LIMIT_ENABLED==0 || ROBOT_PITCH_POSITION_LIMI
 #define ROBOT_PITCH_GRAVITY_FF_MAX_RAD 0.531520844f
 #endif
 static_assert(ROBOT_PITCH_GRAVITY_FF_ENABLED==0 || ROBOT_PITCH_GRAVITY_FF_ENABLED==1,"重力前馈开关只能为0或1");
+
+// ==================== 九、底盘跟随环（仅底盘执行） ====================
+// 以云台相对车头的yaw偏角为误差；增益沿用内部rad/s计算单位，转速限值使用rpm。
+#ifndef ROBOT_FOLLOW_KP
+#define ROBOT_FOLLOW_KP 2.5f
+#endif
+#ifndef ROBOT_FOLLOW_KI
+#define ROBOT_FOLLOW_KI 1.5f
+#endif
+#ifndef ROBOT_FOLLOW_KD
+#define ROBOT_FOLLOW_KD 0.005f
+#endif
+// 积分产生的车体转速上限，rpm；等效原0.05rad/s。
+#ifndef ROBOT_FOLLOW_INTEGRAL_LIMIT_RPM
+#define ROBOT_FOLLOW_INTEGRAL_LIMIT_RPM 10.0f
+#endif
+// 跟随车体转速上限，rpm；等效原0.20rad/s。
+#ifndef ROBOT_FOLLOW_MAX_RPM
+#define ROBOT_FOLLOW_MAX_RPM 60.0f
+#endif
+// 转速指令变化率，rpm/s；角误差回到死区时目标转速归零。
+#ifndef ROBOT_FOLLOW_ACCEL_RPM_S
+#define ROBOT_FOLLOW_ACCEL_RPM_S 240.0f
+#endif
+// yaw相对角误差死区，0.02rad约为1.15度。
+#ifndef ROBOT_FOLLOW_DEADBAND_RAD
+#define ROBOT_FOLLOW_DEADBAND_RAD 0.02f
+#endif
+
+// ==================== 十、小陀螺车体转速（底盘执行） ====================
+// 左下档运行时的固定车体转速，rpm；正值为左转、负值为右转。
+#ifndef ROBOT_SPIN_TARGET_RPM
+#define ROBOT_SPIN_TARGET_RPM 60.0f
+#endif
+// 自旋转速安全上限，rpm；目标转速的绝对值不得超过它。
+#ifndef ROBOT_SPIN_MAX_RPM
+#define ROBOT_SPIN_MAX_RPM 60.0f
+#endif
+// 自旋转速变化率，rpm/s。
+#ifndef ROBOT_SPIN_ACCEL_RPM_S
+#define ROBOT_SPIN_ACCEL_RPM_S 120.0f
+#endif
+// 小陀螺平移的固定方向补偿，单位为度。正值向左修正，负值向右修正。
+#ifndef ROBOT_SPIN_TRANSLATION_OFFSET_DEG
+#define ROBOT_SPIN_TRANSLATION_OFFSET_DEG -20.0f
+#endif

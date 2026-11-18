@@ -219,6 +219,20 @@ extern "C" int run_tests() {
   motor.position=0;params.velocity_ff_nm_per_rad_s=100;CHECK(yaw.configure(params));
   CHECK(yaw.update({0.1f,0},state,safety));CHECK(near(motor.input,3) && yaw.result().torque_limited);
   safety.remote_valid=false;CHECK(!yaw.update({0.1f,0},state,safety) && motor.input==0 && yaw.result().feedforward_nm==0);safety=safe();
+  // 角差仍为零时就能抵消底盘转速；关节反转等速时，对地速度误差为零。
+  CHECK(yaw.configure(limits()));motor.position=0;motor.velocity=0;
+  state.chassis_mode=robot::ChassisMode::Follow;
+  CHECK(yaw.update({0,0},state,safety,0.001f,0.4f));
+  CHECK(near(yaw.result().target_speed_rad_s,-0.4f) && near(motor.input,-0.4f));
+  motor.velocity=-0.4f;
+  CHECK(yaw.update({0,0},state,safety,0.001f,0.4f) && near(motor.input,0));
+  state.chassis_mode=robot::ChassisMode::Spin;motor.velocity=0;
+  CHECK(yaw.update({0,0},state,safety,0.001f,-0.4f) && near(motor.input,0.4f));
+  CHECK(yaw.update({0,0},state,safety,0.001f,4) && near(yaw.result().target_speed_rad_s,-3));
+  CHECK(!yaw.update({0,0},state,safety,0.001f,nan) && motor.input==0);
+  state.chassis_mode=robot::ChassisMode::Separate;
+  // 分离模式车头纠偏也会带动云台，yaw仍须反向补偿。
+  CHECK(yaw.update({0,0},state,safety,0.001f,0.4f) && near(motor.input,-0.4f));
   // 重力曲线用实际角度：只在实测域求值，域外取端点，运动角度不受此域限制。
   params=limits();params.pitch_position_limits_enabled=false;params.gravity_ff_enabled=true;
   params.gravity_cos_nm=0.4f;params.gravity_sin_nm=-0.2f;params.gravity_bias_nm=0.1f;

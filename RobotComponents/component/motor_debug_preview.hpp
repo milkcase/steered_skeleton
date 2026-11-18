@@ -291,6 +291,16 @@ struct RobotMainDiagnostics {
   float pitch_position_target_rad=0,pitch_speed_target_rad_s=0,pitch_torque_nm=0;
   float pitch_feedforward_nm=0,pitch_pid_torque_nm=0,pitch_position_error_rad=0;
   uint32_t pitch_control=0,pitch_torque_limited=0,pitch_feedforward_endpoint=0;
+  // 底盘跟随观测：目标相对航向为零，PID转速经变化率限制后传给四轮逆解。
+  uint32_t chassis_mode=0,follow_active=0;
+  float follow_error_rad=0,follow_pid_rpm=0,chassis_target_rpm=0,chassis_feedback_rpm=0;
+  float yaw_world_feedback_rpm=0,yaw_chassis_compensation_rpm=0;
+  // 跟随时同一底盘IMU参考下的对地目标、实测角与最短误差。
+  uint32_t yaw_world_target_valid=0;
+  float yaw_world_target_rad=0,yaw_world_angle_rad=0,yaw_world_error_rad=0;
+  // 分离模式车头独立锁向的有效标记、目标、底盘实测角和最短误差。
+  uint32_t chassis_heading_hold=0;
+  float chassis_heading_target_rad=0,chassis_heading_actual_rad=0,chassis_heading_error_rad=0;
 };
 extern "C" {inline volatile RobotMainDiagnostics robot_main_diagnostics{};}
 // 一次准备流程的首个停止现场；右下保留，新一轮有效右中准备才允许记录下一次。

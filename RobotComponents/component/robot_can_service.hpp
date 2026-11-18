@@ -50,8 +50,8 @@ class RobotCanService {
     if(control && ((chassis_ && (now-last_steer_ms_>=20 || now-last_wheel_ms_>=20)) || now-last_axis_ms_>=20)) {
       robot_->setTransportReady(false);control=false;action=robot_control::AxisAction::Disable;
     }
-    if(control && !robot_->controlStillSafe()) {
-      robot_->stop(MainStopSource::ControlGate);control=false;action=robot_control::AxisAction::Disable;
+    if(control && !robot_->recheckActiveControl()) {
+      control=false;action=robot_->output().axis_action;
     } else if(action==robot_control::AxisAction::ArmZero && !robot_->armStillSafe()) {
       robot_->stop(MainStopSource::ArmGate);control=false;action=robot_control::AxisAction::Disable;
     }

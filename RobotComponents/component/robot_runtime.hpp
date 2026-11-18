@@ -98,20 +98,25 @@ class RobotRuntime {
     robot_runtime_health.imu_timing_fault=timing.interval_fault;
     robot_runtime_health.imu_recalibrations=imu_recalibration_count_;
     const float yaw=ready?imu_->yaw():0;
+    const float yaw_rate=ready && main_tuning::enabled && board_==robot_control::Board::Chassis?imu_->bodyYawRate():0;
     remote_input::InterruptLock lock;
     imu_ready_=ready;
-    if(updated && ready) {imu_yaw_=yaw;imu_sample_ms_=hello_world::tick::GetTickMs();++ready_updates_;}
+    if(updated && ready) {imu_yaw_=yaw;imu_yaw_rate_=yaw_rate;imu_sample_ms_=hello_world::tick::GetTickMs();++ready_updates_;}
   }
   // 按真实调度间隔处理最新输入、迁移、计算、统一归零和状态发布；不在此发送 CAN。
   void update(float dt_s=0.001f) {
     updateMainTuning();
     robot_control::ControlInput input;
     input.dt_s=dt_s;
+    float chassis_yaw_rate=0;
     debug_dt_s_=dt_s;debug_control_ms_=hello_world::tick::GetTickMs();
     {
       remote_input::InterruptLock lock;
       input.now_ms=hello_world::tick::GetTickMs();
       input.imu_ready=imuFresh(input.now_ms);
+      if(main_tuning::enabled && board_==robot_control::Board::Chassis && input.imu_ready) {
+        chassis_yaw_rate=imu_yaw_rate_;input.chassis_yaw=imu_yaw_;
+      }
       publishRuntimeHealth(input.now_ms,input.imu_ready);
       input.local_ready=localReady(input.now_ms);
       input.axis_valid=axisFresh(input.now_ms);
@@ -164,7 +169,7 @@ class RobotRuntime {
         supervisor_.acceptPitchTarget(target.pitch);
       }
       Gimbal::Safety safe{true,true,true,input.imu_ready,input.axis_valid,input.peer_valid};
-      if(!gimbal_->update(target,out.state,safe,dt_s))stop(MainStopSource::GimbalLoop);
+      if(!gimbal_->update(target,out.state,safe,dt_s,chassis_yaw_rate))stop(MainStopSource::GimbalLoop);
       else if(board_==robot_control::Board::Chassis && !drive_->update(out.motion,input.axis_angle,out.state,dt_s))stop(MainStopSource::DriveLoop);
     }
     publish(input);
@@ -180,23 +185,41 @@ class RobotRuntime {
   // 供预演与最终发送层共同清真实输入；不清通信快照，避免破坏预演心跳。
   void forceZeroForPreview() {supervisor_.stop();zeroInputs();}
   // 最终发帧前再次核对异步更新的急停与反馈；非控制阶段不借旧状态恢复非零输出。
-  bool controlStillSafe() {
+  bool controlStillSafe(bool *mode_change=nullptr) {
     // 看门狗也调用此入口；动力调试必须走同一套真实会话复查，而不是被误判为普通控制。
+    if(mode_change!=nullptr)*mode_change=false;
     if(robot_debug::kPowerEnabled)return debugPowerStillSafe();
     if(robot_debug::kDebugEnabled || !supervisor_.output().control)return false;
     remote_input::InterruptLock lock;
     const uint32_t now=hello_world::tick::GetTickMs();
     if(!imuFresh(now) || !localReady(now) || !axisFresh(now) || comm_==nullptr || !comm_->commandsUsable())return false;
+    const auto mode=supervisor_.output().state.chassis_mode;
+    bool changed=false;
     if(board_==robot_control::Board::Gimbal) {
       GimbalChassisComm::ChassisData data;
       if(!comm_->readPeer(data) || !data.flags.yaw_feedback_valid ||
-          data.state.chassis_mode!=supervisor_.output().state.chassis_mode || data.state.gimbal_mode!=GimbalMode::JointPosition)return false;
+          data.state.chassis_mode==ChassisMode::Disabled || data.state.gimbal_mode!=GimbalMode::JointPosition)return false;
       const auto remote=readRemote();
-      return remote.valid && remote.released && remote.run && remote.mode==supervisor_.output().state.chassis_mode;
+      if(!remote.valid || !remote.released || !remote.run || (remote.mode==ChassisMode::Spin && !params_.allow_spin))return false;
+      changed=remote.mode!=mode || data.state.chassis_mode!=mode;
+    } else {
+      GimbalChassisComm::GimbalData data;
+      if(!comm_->readPeer(data) || !data.flags.pitch_feedback_valid || data.state.chassis_mode==ChassisMode::Disabled ||
+          data.state.gimbal_mode!=GimbalMode::JointPosition)return false;
+      changed=data.state.chassis_mode!=mode;
     }
-    GimbalChassisComm::GimbalData data;
-    return comm_->readPeer(data) && data.flags.pitch_feedback_valid &&
-        data.state.chassis_mode==supervisor_.output().state.chassis_mode && data.state.gimbal_mode==GimbalMode::JointPosition;
+    if(mode_change!=nullptr)*mode_change=main_tuning::enabled && changed;
+    return !changed;
+  }
+  // 发送和看门狗共用最终复查；仅健康模式不一致时保留准备许可，其余失效按保护停机。
+  bool recheckActiveControl() {
+    remote_input::InterruptLock lock;
+    bool mode_change=false;
+    if(controlStillSafe(&mode_change))return true;
+    if(!mode_change) {stop(MainStopSource::ControlGate);return false;}
+    supervisor_.pauseForModeChange();zeroInputs();
+    if(board_==robot_control::Board::Gimbal)comm_->gimbal_data().motion={};
+    return false;
   }
   // 最终发使能前重新确认窗口、遥控和对端自检；使能仅用于零输入反馈握手。
   bool armStillSafe() {
@@ -417,11 +440,11 @@ class RobotRuntime {
     d.pitch_gravity_ff_enabled=v[GravityEnabled]==1;d.gravity_cos_nm=v[GravityCos];d.gravity_sin_nm=v[GravitySin];
     d.gravity_bias_nm=v[GravityBias];d.gravity_fit_min_rad=v[GravityMin];d.gravity_fit_max_rad=v[GravityMax];
   }
-  // 将 DT7 五通道映射为有界遥控意图；水平正值按候选配置映射为向右，现场核对。
+  // 将 DT7 映射为有界遥控意图，Main只用四个摇杆通道检查回中。
   robot_control::RemoteIntent readRemote() {
     robot_control::RemoteIntent out;hello_world::remote_control::DT7 rc;
     if(!ReadRemoteControl(rc))return out;
-    const float values[5]={rc.rc_lv(),rc.rc_lh(),rc.rc_rv(),rc.rc_rh(),rc.rc_wheel()};
+    const float values[5]={rc.rc_lv(),rc.rc_lh(),rc.rc_rv(),rc.rc_rh(),main_tuning::enabled?0.0f:rc.rc_wheel()};
     out.neutral=true;
     for(float v:values) {
       if(!std::isfinite(v) || std::fabs(v)>1.001f)return {};
@@ -435,8 +458,9 @@ class RobotRuntime {
     else if(rc.rc_l_switch()==kSwitchStateDown)out.mode=ChassisMode::Spin;
     else return {};
     out.motion={channel(rc.rc_lv())*params_.max_vx_m_s,-channel(rc.rc_lh())*params_.max_vy_m_s,
-                channel(rc.rc_wheel())*params_.max_w_rad_s};
-    if(params_.separate_only) {
+                channel(values[4])*params_.max_w_rad_s};
+    // Main的三种模式共用二维平移，云台侧w保持零，自转目标由底盘产生。
+    if(main_tuning::enabled) {
       const float length=std::hypot(values[0],values[1]);
       if(length<=params_.deadzone)out.motion={};
       else {const float scale=length>1?1/length:1;out.motion={values[0]*scale*params_.max_vx_m_s,-values[1]*scale*params_.max_vy_m_s,0};}
@@ -616,7 +640,7 @@ class RobotRuntime {
         p.max_torque_nm>axis_->motor_info().torq_input_lim ||
         (p.actual_speed_limit_rad_s>0 && (!std::isfinite(axis_->vel()) || std::fabs(axis_->vel())>p.actual_speed_limit_rad_s)))return false;
     if(board_==robot_control::Board::Chassis)return gimbal_->axis()==Gimbal::Axis::Yaw && drive_!=nullptr &&
-        drive_->ready(now) && p.max_target_rate_rad_s>=params_.yaw_rate_rad_s+(params_.separate_only?0:params_.max_w_rad_s);
+        drive_->ready(now) && p.max_target_rate_rad_s>=params_.yaw_rate_rad_s+params_.max_w_rad_s;
     return gimbal_->axis()==Gimbal::Axis::Pitch && (!p.pitch_position_limits_enabled || p.pitch_limits_confirmed) && p.max_target_rate_rad_s>=params_.pitch_rate_rad_s;
   }
   // 读取本板方向的完整状态；恢复自检需要读取非 Working 安全状态，而非强求控制许可。
@@ -626,6 +650,8 @@ class RobotRuntime {
       GimbalChassisComm::GimbalData data;
       in.peer_valid=comm_->readPeer(data);in.peer_state=data.state;in.peer_flags=data.flags;
       in.peer_feedback=data.feedback;in.peer_yaw_target=data.yaw_target;peer_motion_=data.motion;
+      in.peer_world_yaw_target_valid=in.peer_valid && data.world_yaw_target_valid;
+      in.peer_world_yaw_target=data.world_yaw_target;
     } else {
       GimbalChassisComm::ChassisData data;
       in.peer_valid=comm_->readPeer(data);in.peer_state=data.state;in.peer_flags=data.flags;
@@ -646,6 +672,24 @@ class RobotRuntime {
     if(!robot_debug::kDebugEnabled) {
       auto &d=robot_main_diagnostics;d.board=board_==robot_control::Board::Chassis?0:1;
       d.life=static_cast<uint32_t>(o.state.life);d.control=o.control;d.ready=o.ready;
+      d.chassis_mode=static_cast<uint32_t>(o.state.chassis_mode);
+      d.follow_active=board_==robot_control::Board::Chassis && o.control && o.state.chassis_mode==ChassisMode::Follow;
+      d.follow_error_rad=o.follow_error_rad;d.follow_pid_rpm=o.follow_pid_rate_rad_s/main_tuning::rpm;
+      d.chassis_target_rpm=d.board==0 && o.control?o.motion.w/main_tuning::rpm:0;
+      d.chassis_feedback_rpm=d.board==0 && in.imu_ready && std::isfinite(imu_yaw_rate_)?imu_yaw_rate_/main_tuning::rpm:0;
+      d.chassis_heading_hold=o.chassis_heading_hold;
+      d.chassis_heading_target_rad=o.chassis_heading_target_rad;
+      d.chassis_heading_error_rad=o.chassis_heading_error_rad;
+      d.chassis_heading_actual_rad=d.board==0 && in.imu_ready?SupervisorWrap(in.chassis_yaw):0;
+      // 平地时对地yaw转速可用本地IMU与关节速度叠加观测，输出补偿单独记录。
+      const bool yaw_observed=d.board==0 && in.axis_valid && in.imu_ready && std::isfinite(imu_yaw_rate_);
+      d.yaw_world_feedback_rpm=yaw_observed?(axis_->vel()+imu_yaw_rate_)/main_tuning::rpm:0;
+      d.yaw_world_angle_rad=yaw_observed?SupervisorWrap(in.axis_angle+in.chassis_yaw):0;
+      d.yaw_world_target_valid=d.board==0 && o.control && o.world_yaw_target_valid;
+      d.yaw_world_target_rad=d.yaw_world_target_valid?o.world_yaw_target:0;
+      d.yaw_world_error_rad=d.yaw_world_target_valid && yaw_observed?SupervisorWrap(d.yaw_world_target_rad-d.yaw_world_angle_rad):0;
+      d.yaw_chassis_compensation_rpm=d.board==0 && gimbal_!=nullptr?
+          gimbal_->result().chassis_rate_correction_rad_s/main_tuning::rpm:0;
       d.imu=in.imu_ready;d.peer=in.peer_valid;d.axis_valid=in.axis_valid;
       d.axis_action=static_cast<uint32_t>(o.axis_action);d.axis_enabled=axis_!=nullptr && axis_->is_enabled();
       d.axis_status=axis_!=nullptr?static_cast<uint32_t>(axis_->status_code()):0xffffffffu;
@@ -704,6 +748,8 @@ class RobotRuntime {
       GimbalChassisComm::GimbalData data;data.state=o.state;data.flags=flags;
       data.flags.pitch_feedback_valid=fresh;data.feedback.pitch=fresh?axis_->angle():0;
       data.yaw_target=o.control?o.target.yaw:(in.peer_flags.yaw_feedback_valid?in.peer_feedback.yaw:0);
+      data.world_yaw_target_valid=o.control && o.world_yaw_target_valid;
+      data.world_yaw_target=data.world_yaw_target_valid?o.world_yaw_target:0;
       data.motion=o.motion;comm_->gimbal_data()=data;
       if(robot_debug::kDebugEnabled) {
         // 使用本周期状态机实际检查的同一份遥控样本，避免两次读取跨越回中而发布矛盾字段。
@@ -781,7 +827,7 @@ class RobotRuntime {
   uint32_t imu_recalibration_count_=0;
   uint32_t poll_count_=0,ready_updates_=0,max_poll_gap_ms_=0,imu_drop_count_=0;
   bool health_was_fresh_=false;
-  uint32_t imu_sample_ms_=0,last_poll_ms_=0;float imu_yaw_=0;
+  uint32_t imu_sample_ms_=0,last_poll_ms_=0;float imu_yaw_=0,imu_yaw_rate_=0;
   ChassisMotion peer_motion_{};
   hello_world::motor::Motor *debug_target_=nullptr;
   robot_debug::Preview debug_preview_;

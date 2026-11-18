@@ -123,6 +123,8 @@ class Imu {
   float pitch() const { return estimator_.pitch(nowUs()); }
   // 输出相对起始姿态的 yaw，单位 rad；不可用时返回零，六轴 IMU 不提供绝对航向。
   float yaw() const { return estimator_.yaw(nowUs()); }
+  // 返回去除零漂的车体Z轴角速度，供平地底盘转速观测；调用方先检查isReady。
+  float bodyYawRate() const {return estimator_.sampleDiagnostics().gyro[2]-estimator_.bias(2);}
   // 返回最近有效温度，单位摄氏度；未就绪时返回零，不作为姿态许可判断。
   float temperature() const { return isReady()?temperature_:0; }
   // 返回指定轴已估计的角速度零漂，单位 rad/s；用于观察校准，不代表已经就绪。

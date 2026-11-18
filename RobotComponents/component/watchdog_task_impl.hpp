@@ -38,7 +38,7 @@ void WatchdogProtect() {
 // 普通遥控/反馈异步失效走正常归零，不把急停本身误判成必须复位的软件故障。
 bool WatchdogOutputsSafe() {
   auto *robot=GetRobot();if(robot==nullptr)return false;
-  if(robot->output().control && !robot->controlStillSafe()) {robot->stop();RobotCommunicationTick();}
+  if(robot->output().control && !robot->recheckActiveControl())RobotCommunicationTick();
   const auto &out=robot->output();
   if(out.control && out.state.life!=::robot::LifeState::Working)return false;
   return WatchdogBoardInputsSafe(out.control);

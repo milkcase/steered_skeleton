@@ -63,9 +63,9 @@ bool ChassisIkSolver::gimbalToBody(const robot::ChassisMotion &command,float del
 
 // 完成坐标变换、轮组逆解、等效解选取、统一轮速缩放和舵角变化率限制。
 bool ChassisIkSolver::solve(const robot::ChassisMotion &command,float delta_rad,
-                           const float current_steer_rad[4],float dt_s) {
+                           const float current_steer_rad[4],float dt_s,float wheel_limit_rad_s) {
   if(!configured_ || current_steer_rad==nullptr || !std::isfinite(dt_s) || dt_s<=0 ||
-      dt_s>limits_.max_dt_s)return fail();
+      dt_s>limits_.max_dt_s || !std::isfinite(wheel_limit_rad_s) || wheel_limit_rad_s<0)return fail();
   BodyMotion body;
   if(!gimbalToBody(command,delta_rad,body))return fail();
   float measured[4],goals[4],speeds[4]{};
@@ -77,6 +77,7 @@ bool ChassisIkSolver::solve(const robot::ChassisMotion &command,float delta_rad,
   if(!std::isfinite(max_step))return fail();
   Result next;
   // 尚未整定任一动力上限时，保持当前/上一目标角，所有驱动轮速度为零。
+  const float wheel_limit=wheel_limit_rad_s>0?wheel_limit_rad_s:limits_.max_wheel_speed_rad_s;
   const bool enabled=limits_.max_wheel_speed_rad_s>0 && limits_.max_steer_rate_rad_s>0;
   bool all_aligned=enabled;
   float peak=0;
@@ -112,7 +113,7 @@ bool ChassisIkSolver::solve(const robot::ChassisMotion &command,float delta_rad,
     if(std::fabs(speeds[i])>peak)peak=std::fabs(speeds[i]);
   }
   // 整体等比例缩放四轮速度，避免各轮单独截断而改变理想运动的速度比例。
-  const float scale=peak>limits_.max_wheel_speed_rad_s?limits_.max_wheel_speed_rad_s/peak:1.0f;
+  const float scale=peak>wheel_limit?wheel_limit/peak:1.0f;
   for(int i=0;i<4;++i) {
     // 任一运动轮组未对准最终舵角，四个驱动轮统一暂缓，转向目标仍可逐步接近。
     next.wheels[i].speed_rad_s=(limits_.project_drive_speed || all_aligned)?speeds[i]*scale:0.0f;

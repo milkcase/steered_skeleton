@@ -45,6 +45,7 @@ class Gimbal {
     float feedforward_nm=0,pid_torque_nm=0;
     bool feedforward_endpoint=false; // 实际角度在拟合区间外时采用端点补偿，避免外推。
     bool torque_limited=false; // PID与前馈请求之和被总力矩预算截断。
+    float chassis_rate_correction_rad_s=0; // 加到底盘上的yaw电机关节速度目标的实际补偿量。
   };
 
   // 绑定本板一轴、PID 和达妙对象；仅初始化内存中的零输入，不调用使能或 CAN 发送。
@@ -74,8 +75,9 @@ class Gimbal {
     return configured_;
   }
 
-  // 检查全部动作条件，读取本地关节反馈并计算力矩；只写本地 setInput，不发送也不使能。
-  bool update(const GimbalMotion &requested,const ModuleState &state,const Safety &safety,float dt_s=0.001f) {
+  // 检查动作条件并计算本地力矩；yaw可使用底盘实测角速度修正关节目标。
+  bool update(const GimbalMotion &requested,const ModuleState &state,const Safety &safety,
+      float dt_s=0.001f,float chassis_yaw_rate_rad_s=0) {
     if(!configured_ || motor_==nullptr || pid_==nullptr || !isValid(state) ||
         state.life!=LifeState::Working || state.source!=ControlSource::RemoteControl ||
         state.gimbal_mode!=GimbalMode::JointPosition || !safety.remote_valid ||
@@ -118,6 +120,16 @@ class Gimbal {
     // 外环将角度误差变为目标速度，内环必须减去实际电机速度，不能直接把外环当力矩。
     next.target_speed_rad_s=pid_->updateError(next.error_rad,dt_s);
     if(!pid_->lastUpdateOk())return fail();
+    if(axis_==Axis::Yaw) {
+      if(!std::isfinite(chassis_yaw_rate_rad_s))return fail();
+      // 底盘与关节转速相加得到云台的对地转速。用本地IMU先抵消底盘转速，再让速度环追关节目标。
+      const float compensated_speed=next.target_speed_rad_s-chassis_yaw_rate_rad_s;
+      if(!std::isfinite(compensated_speed))return fail();
+      const float joint_speed=clamp(compensated_speed,-params_.max_speed_rad_s,params_.max_speed_rad_s);
+      next.chassis_rate_correction_rad_s=joint_speed-next.target_speed_rad_s;
+      next.target_speed_rad_s=joint_speed;
+      next.limited=next.limited || joint_speed!=compensated_speed;
+    }
     // 保护带逐渐收紧向外速度目标；速度环仍可制动和施加静止保持力矩。
     if(limit_pitch && params_.pitch_guard_rad>0) {
       const float toward_min=params_.max_speed_rad_s*clamp((measured-params_.pitch_min_rad)/params_.pitch_guard_rad,0,1);

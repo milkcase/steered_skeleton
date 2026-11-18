@@ -14,6 +14,7 @@
  */
 /* Includes ------------------------------------------------------------------*/
 #include "chassis.hpp"
+#include "robot_control_config.hpp"
 /* Private macro -------------------------------------------------------------*/
 /* Private constants ---------------------------------------------------------*/
 /* Private types -------------------------------------------------------------*/
@@ -43,7 +44,14 @@ bool robot::Chassis::updateTargets(const ChassisMotion &command,float delta_rad,
       state.source!=ControlSource::RemoteControl || state.chassis_mode==ChassisMode::Disabled) {
     stop();return false;
   }
-  if(!solver_->solve(command,delta_rad,steer_feedback,dt_s)) { stop();return false; }
+  const bool spin_mode=main_tuning::enabled && state.chassis_mode==ChassisMode::Spin;
+  const float wheel_limit=spin_mode?robot_control::spinWheelTargetLimit(command.w):0.0f;
+  // 偏角只叠加到平移坐标变换，后续逆解仍用原平移幅度和原自转速度计算各轮目标。
+  constexpr float offset_deg=ROBOT_SPIN_TRANSLATION_OFFSET_DEG;
+  static_assert(offset_deg>=-180.0f && offset_deg<=180.0f,"小陀螺平移补偿角必须在 -180 至 +180 度内");
+  constexpr float offset_rad=offset_deg*0.017453292519943295f;
+  const float translation_delta=spin_mode?delta_rad+offset_rad:delta_rad;
+  if(!solver_->solve(command,translation_delta,steer_feedback,dt_s,wheel_limit)) { stop();return false; }
   targets_=solver_->result();
   return true;
 }

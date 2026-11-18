@@ -230,9 +230,14 @@ bool robot::GimbalChassisComm::packLocal(uint8_t out[15]) const {
       }
       return true;
     }
+    // 用末字节标明语义，原未转述yaw反馈槽携带对地目标，仍随整组校验提交。
+    if(d.world_yaw_target_valid && (!supportsWorldYawTarget(d.state.chassis_mode) || !permitted(d.state,d.flags) ||
+        d.flags.yaw_feedback_valid))return false;
+    out[14]=d.world_yaw_target_valid?1:0;
+    const float yaw_slot=d.world_yaw_target_valid?d.world_yaw_target:d.feedback.yaw;
     return writeCommon(out,d.state,d.flags) && writeNumber(out+2,d.motion.vx,1000) &&
         writeNumber(out+4,d.motion.vy,1000) && writeNumber(out+6,d.motion.w,1000) &&
-        writeNumber(out+8,d.yaw_target,10000) && writeNumber(out+10,d.feedback.yaw,10000) &&
+        writeNumber(out+8,d.yaw_target,10000) && writeNumber(out+10,yaw_slot,10000) &&
         writeNumber(out+12,d.feedback.pitch,10000);
   }
   return false;
@@ -242,8 +247,8 @@ bool robot::GimbalChassisComm::unpackPeer(const uint8_t in[15]) {
   if(code_part_==CodePart::Chassis) {
     GimbalData d;
     if(!readCommon(in,d.state,d.flags))return false;
-    if(!d.flags.debug_power && in[14]!=0)return false;
     if(d.flags.debug_preview) {
+      if(!d.flags.debug_power && in[14]!=0)return false;
       auto &p=d.preview;
       if(robot_debug::mode::kWideSession && d.flags.debug_power) {
         if(!readNumber(in+2,1000,p.steer) || std::fabs(p.steer)>1.001f ||
@@ -274,10 +279,16 @@ bool robot::GimbalChassisComm::unpackPeer(const uint8_t in[15]) {
       if(d.flags.emergency_released!=(p.valid && p.right!=2))return false;
       gimbal_data_=d;return true;
     }
+    if(in[14]>1 || (in[14]==1 && (!supportsWorldYawTarget(d.state.chassis_mode) || !permitted(d.state,d.flags) ||
+        d.flags.yaw_feedback_valid)))return false;
     if(
         !readNumber(in+2,1000,d.motion.vx) || !readNumber(in+4,1000,d.motion.vy) ||
         !readNumber(in+6,1000,d.motion.w) || !readNumber(in+8,10000,d.yaw_target) ||
         !readNumber(in+10,10000,d.feedback.yaw) || !readNumber(in+12,10000,d.feedback.pitch))return false;
+    if(in[14]==1) {
+      if(std::fabs(d.feedback.yaw)>3.1417f)return false;
+      d.world_yaw_target=d.feedback.yaw;d.world_yaw_target_valid=true;d.feedback.yaw=0;
+    }
     gimbal_data_=d;return true;
   }
   if(code_part_==CodePart::Gimbal) {
