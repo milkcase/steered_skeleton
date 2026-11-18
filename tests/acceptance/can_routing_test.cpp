@@ -2,6 +2,7 @@
 #include "ins_motor.hpp"
 #include "motor_feedback.hpp"
 #include "main_tuning_link.hpp"
+#include "pitch_feedback_link.hpp"
 #include "tick.hpp"
 #include "support.hpp"
 CAN_HandleTypeDef hcan1{1},hcan2{2};CAN_RxHeaderTypeDef injected{};
@@ -68,7 +69,7 @@ extern "C" int run_tests() {
   data[0]=static_cast<uint8_t>(0x80|(owned-0x10));inject(owned);
   CHECK(!robot_control::MotorFeedbacks().fresh(8,now));
   // 参数帧只走灰色板间线，不得被另一CAN口误接收，也不得在CAN中断直接应用。
-  main_tuning::Bundle bundle{{0.6f,0.6f,1,0.5f,2,5,0,0,0,1,0.2f,0.5f,0,0.5f,0.5f,0.5f,2,-0.419f,0.515f,0.03f}};
+  main_tuning::Bundle bundle{{0.6f,0.6f,1,0.5f,2,5,0,0,0,1,0.2f,0.5f,0,0.5f,0.5f,0.5f,2,-0.419f,0.515f,0.03f,0}};
   uint32_t hash=0;
 #if defined(TEST_CHASSIS)
   main_tuning::parameter_source.load(bundle);main_tuning::Sink cloud;
@@ -77,6 +78,18 @@ extern "C" int run_tests() {
   CHECK(cloud.pending(bundle,hash,now));cloud.applied(hash);CHECK(cloud.frame(data,now));
   inject(main_tuning::kParameterAckId,true);CHECK(!main_tuning::parameter_source.ready(now));
   inject(main_tuning::kParameterAckId);CHECK(main_tuning::parameter_source.ready(now));
+  // pitch整组遥测只能从灰色CAN2接收，未收齐不得显示，也不能为本地yaw续命。
+  pitch_feedback::Link source;source.publish(-0.25f,-0.12f,0.321f,true,now);
+  for(int i=0;i<pitch_feedback::kPages;++i) {
+    source.frame(data,now);inject(pitch_feedback::kId,true);
+    inject(pitch_feedback::kId);source.sent();
+    if(i+1<pitch_feedback::kPages)CHECK(!pitch_feedback::channel.read(now).valid);
+  }
+  auto sample=pitch_feedback::channel.read(now);
+  CHECK(sample.valid && std::fabs(sample.angle+0.25f)<0.00011f && std::fabs(sample.torque-0.321f)<0.0011f);
+  CHECK(!robot_control::MotorFeedbacks().fresh(8,now));
+  CHECK(!pitch_feedback::channel.read(now+50).valid);
+  data[3]^=1;inject(pitch_feedback::kId);CHECK(!pitch_feedback::channel.read(now).valid);
 #else
   main_tuning::Source base;base.load(bundle);
   for(int pass=0;pass<2;++pass) {

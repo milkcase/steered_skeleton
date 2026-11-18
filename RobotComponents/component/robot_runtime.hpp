@@ -9,7 +9,11 @@
 #include "motor_debug_preview.hpp"
 #include "motor_debug_power.hpp"
 #include "main_tuning_parameters.hpp"
+#include "pitch_feedback_link.hpp"
 namespace robot {
+// 正常主程序首次停止的调用来源；仅诊断用途，不是可写的运行许可。
+enum class MainStopSource : uint32_t {External=0,GimbalLoop=1,DriveLoop=2,ControlGate=3,ArmGate=4,
+  AxisGate=5,Transport=6,GroupEncoding=7,DisableCommand=8,FeedbackLost=9,SupervisorGate=10};
 // 底盘闭环端口：云台板不链接或调用底盘实例，仅底盘本地实现此接口。
 class DrivePort {
  public:
@@ -63,7 +67,7 @@ class RobotRuntime {
     for(int i=0;i<4;++i)debug_steers_[i]=motors[i];
   }
   // 保存 CAN 初始化结果，失败保持停用；不以 UART 或对象非空代替 CAN 可用。
-  void setTransportReady(bool ready) {transport_ready_=ready;if(!ready)stop();}
+  void setTransportReady(bool ready) {transport_ready_=ready;if(!ready)stop(MainStopSource::Transport);}
   // 已确认映射时才初始化 BMI088；候选 PA4/PB0 和单位矩阵不自动视为实物确认。
   bool initializeImu(const hello_world::imu::BMI088HWConfig &hardware,const float rotation[9],bool confirmed) {
     imu_started_=confirmed && imu_!=nullptr && imu_->init(hardware,rotation);
@@ -77,12 +81,22 @@ class RobotRuntime {
     if(sensor_polled_ && now-last_poll_ms_>max_poll_gap_ms_)max_poll_gap_ms_=now-last_poll_ms_;
     ++poll_count_;
     sensor_polled_=true;last_poll_ms_=now;
+    if(main_tuning::enabled && !robot_debug::kDebugEnabled) {
+      bool restart=false;
+      {
+        remote_input::InterruptLock lock;
+        restart=imu_restart_requested_;
+        imu_restart_requested_=false;
+      }
+      if(restart && imu_->restartAfterSampleFault())++imu_recalibration_count_;
+    }
     const bool updated=imu_->update(),ready=imu_->isReady();
     const auto timing=imu_->timingDiagnostics();
     robot_runtime_health.imu_state=static_cast<uint32_t>(imu_->state());
     robot_runtime_health.imu_last_interval_us=timing.last_interval_us;
     robot_runtime_health.imu_max_interval_us=timing.max_interval_us;
     robot_runtime_health.imu_timing_fault=timing.interval_fault;
+    robot_runtime_health.imu_recalibrations=imu_recalibration_count_;
     const float yaw=ready?imu_->yaw():0;
     remote_input::InterruptLock lock;
     imu_ready_=ready;
@@ -118,20 +132,40 @@ class RobotRuntime {
       // 预演独立于整车Working，不伪造原有ready；先清全部真实输入，再发布零输出快照。
       forceZeroForPreview();updateDebugPreview(input);publish(input);return;
     }
+    // 诊断按真实遥控准备周期清资格；短暂收不到对端不冒充一次新的右下复位。
+    if(main_tuning::enabled) {
+      // 仅一份有效遥控的右下切换发出恢复请求；丢遥控不算切换，重校准由前台执行。
+      if(input.remote.valid) {
+        const bool down=!input.remote.released;
+        if(down && !imu_right_was_down_)imu_restart_requested_=true;
+        imu_right_was_down_=down;
+      }
+      if(!input.remote.valid || input.remote.released)imu_restart_requested_=false;
+      if(input.remote.valid && !input.remote.released) {main_preparation_seen_=false;main_axis_permission_seen_=false;}
+      else if(input.remote.arm && !main_preparation_seen_) {
+        main_preparation_seen_=true;main_stop_recorded_=false;main_axis_permission_seen_=false;
+      }
+      if(main_axis_was_valid_ && !input.axis_valid)recordMainStop(MainStopSource::FeedbackLost);
+      main_axis_was_valid_=input.axis_valid;
+    }
     supervisor_.update(input);
     const auto &out=supervisor_.output();
+    // 在状态机刚撤销许可时就保存本轮输入，早于发送层失能及下一帧电机反馈。
+    if(out.axis_action==robot_control::AxisAction::Disable)
+      recordMainStop(MainStopSource::SupervisorGate,&input);
+    if(out.axis_action!=robot_control::AxisAction::Disable)main_axis_permission_seen_=true;
     if(!out.control)zeroInputs();
     else {
       GimbalMotion target=out.target;
-      if(board_==robot_control::Board::Gimbal) {
+      if(board_==robot_control::Board::Gimbal && gimbal_->params().pitch_position_limits_enabled) {
         const auto &p=gimbal_->params();
         if(target.pitch<p.pitch_min_rad)target.pitch=p.pitch_min_rad;
         if(target.pitch>p.pitch_max_rad)target.pitch=p.pitch_max_rad;
         supervisor_.acceptPitchTarget(target.pitch);
       }
       Gimbal::Safety safe{true,true,true,input.imu_ready,input.axis_valid,input.peer_valid};
-      if(!gimbal_->update(target,out.state,safe,dt_s) ||
-          (board_==robot_control::Board::Chassis && !drive_->update(out.motion,input.axis_angle,out.state,dt_s)))stop();
+      if(!gimbal_->update(target,out.state,safe,dt_s))stop(MainStopSource::GimbalLoop);
+      else if(board_==robot_control::Board::Chassis && !drive_->update(out.motion,input.axis_angle,out.state,dt_s))stop(MainStopSource::DriveLoop);
     }
     publish(input);
     // Main已发布自己的运行镜像，不再每毫秒构造停用的单电机预演大快照，给前台IMU留出时间。
@@ -180,7 +214,8 @@ class RobotRuntime {
         (input.peer_state.life==LifeState::Resurrection || input.peer_state.life==LifeState::Working);
   }
   // 失效统一清状态与所有本板输入；通信层随后撤销旧邮箱并发送零帧/失能帧。
-  void stop() {
+  void stop(MainStopSource source=MainStopSource::External) {
+    recordMainStop(source);
     if(robot_debug::drive::kVector && drive_!=nullptr)drive_->vectorStop();
     // 通用保护仍执行原停止动作；只补充首次失效记录，不覆盖先前复查已保存的现场。
     if(robot_debug::kPowerEnabled) {
@@ -198,6 +233,44 @@ class RobotRuntime {
   }
   // 查询当前决策，供通信层选择纯力矩、零输入或失能帧。
   const robot_control::ControlOutput &output() const {return robot_debug::kPowerEnabled?debug_power_.output():supervisor_.output();}
+  // 在清状态/发送失能之前保存首个现场；不取诊断值控制电机，不修改任何安全条件。
+  void recordMainStop(MainStopSource source,const robot_control::ControlInput *observed=nullptr) {
+    if(!main_tuning::enabled || robot_debug::kDebugEnabled || main_stop_recorded_ || !main_axis_permission_seen_)return;
+    remote_input::InterruptLock lock;main_stop_recorded_=true;
+    const uint32_t now=hello_world::tick::GetTickMs();robot_control::ControlInput in;
+    if(observed!=nullptr)in=*observed;
+    else {
+      readPeer(in);
+      if(board_==robot_control::Board::Gimbal)in.remote=readRemote();
+      else {in.remote.valid=in.peer_valid && in.peer_flags.remote_valid;in.remote.released=in.peer_flags.emergency_released;
+        in.remote.arm=in.peer_state.life==LifeState::Resurrection;in.remote.run=in.peer_state.life==LifeState::Working;}
+    }
+    const auto &o=supervisor_.output();auto &d=robot_main_stop;
+    d.count=++main_stop_count_;d.time_ms=now;d.source=static_cast<uint32_t>(source);
+    d.life=static_cast<uint32_t>(o.state.life);d.control=o.control;d.axis_action=static_cast<uint32_t>(o.axis_action);
+    d.axis_enabled=axis_!=nullptr && axis_->is_enabled();d.axis_valid=axisFresh(now);
+    d.axis_status=axis_!=nullptr?static_cast<uint32_t>(axis_->status_code()):0xffffffffu;
+    d.peer_valid=in.peer_valid;d.peer_life=static_cast<uint32_t>(in.peer_state.life);
+    d.peer_ready=in.peer_flags.ready;d.peer_imu=in.peer_flags.imu_ready;d.peer_command_valid=in.peer_flags.command_valid;d.peer_fault=in.peer_flags.fault;
+    d.peer_axis_valid=board_==robot_control::Board::Chassis?in.peer_flags.pitch_feedback_valid:in.peer_flags.yaw_feedback_valid;
+    d.commands_usable=comm_!=nullptr && comm_->commandsUsable();d.imu=imuFresh(now);d.parameters=mainTuningReady(now);
+    d.prepared=supervisor_.prepared();d.prepare_failed=supervisor_.preparationFailed();
+    d.remote_valid=in.remote.valid;d.remote_released=in.remote.released;d.remote_arm=in.remote.arm;d.remote_run=in.remote.run;
+    d.remote_neutral=in.remote.neutral;d.dt_s=observed!=nullptr?observed->dt_s:0;
+    d.axis_angle_rad=axis_!=nullptr?axis_->angle():0;d.axis_velocity_rad_s=axis_!=nullptr?axis_->vel():0;
+    if(comm_!=nullptr) {
+      // 读取失败会清空对端输出；因此另存接收拒绝事件与最后完整缓存，后者仅供诊断绝不授权。
+      const auto rx=comm_->rxDiagnostics();d.peer_age_ms=comm_->peerAgeMs();d.rx_completed=rx.completed;
+      d.crc_errors=rx.crc_errors;d.format_errors=rx.format_errors;d.order_errors=rx.order_errors;
+      d.assembly_timeouts=rx.assembly_timeouts;d.replays=rx.replays;robot_debug::publishRxEvent(d.rx_event,rx.last_rejection);
+      const auto &flags=board_==robot_control::Board::Chassis?comm_->gimbal_data().flags:comm_->chassis_data().flags;
+      const auto &state=board_==robot_control::Board::Chassis?comm_->gimbal_data().state:comm_->chassis_data().state;
+      d.last_peer_life=static_cast<uint32_t>(state.life);d.last_peer_ready=flags.ready;d.last_peer_imu=flags.imu_ready;
+      d.last_peer_axis_valid=board_==robot_control::Board::Chassis?flags.pitch_feedback_valid:flags.yaw_feedback_valid;
+      d.last_peer_command_valid=flags.command_valid;d.last_peer_fault=flags.fault;
+      d.last_peer_axis_rad=board_==robot_control::Board::Chassis?comm_->gimbal_data().feedback.pitch:comm_->chassis_data().feedback.yaw;
+    }
+  }
   // 停止动力调试并发布撤销会话，避免发送层沿用上一份Working授权快照。
   void stopDebugPower(robot_debug::Reason reason) {
     if(robot_debug::drive::kVector && drive_!=nullptr)drive_->vectorStop();
@@ -317,6 +390,9 @@ class RobotRuntime {
         axis.speed_pid.integral_limit=v[SpeedIntegral];axis.speed_pid.output_limit=v[Torque];
         axis.max_torque_nm=v[Torque];axis.max_speed_rad_s=v[PositionSpeed];axis.max_target_rate_rad_s=v[TargetRate];
         axis.actual_speed_limit_rad_s=v[TripSpeed];axis.pitch_min_rad=v[PitchMin];axis.pitch_max_rad=v[PitchMax];axis.pitch_guard_rad=v[PitchGuard];
+        axis.pitch_position_limits_enabled=v[PitchLimitEnabled]==1;
+        axis.gravity_ff_enabled=v[GravityEnabled]==1;axis.gravity_cos_nm=v[GravityCos];axis.gravity_sin_nm=v[GravitySin];
+        axis.gravity_bias_nm=v[GravityBias];axis.gravity_fit_min_rad=v[GravityMin];axis.gravity_fit_max_rad=v[GravityMax];
         if(supervisor_.configure(control) && axis_pid_->configure(position) && gimbal_->configure(axis) && gimbal_->loopsReady()) {
           params_=control;parameter_sink.applied(hash);++main_tuning_apply_count_;
           publishMainTuning(bundle);
@@ -337,6 +413,9 @@ class RobotRuntime {
     using namespace main_tuning;const auto &v=bundle.value;auto &d=robot_tuning_diagnostics;
     d.pitch_position_p=v[PositionP];d.pitch_speed_p=v[SpeedP];d.pitch_torque_nm=v[Torque];
     d.max_vx_m_s=v[Vx];d.yaw_rate_rad_s=v[YawRate];d.pitch_rate_rad_s=v[PitchRate];
+    d.pitch_position_limits_enabled=v[PitchLimitEnabled]==1;
+    d.pitch_gravity_ff_enabled=v[GravityEnabled]==1;d.gravity_cos_nm=v[GravityCos];d.gravity_sin_nm=v[GravitySin];
+    d.gravity_bias_nm=v[GravityBias];d.gravity_fit_min_rad=v[GravityMin];d.gravity_fit_max_rad=v[GravityMax];
   }
   // 将 DT7 五通道映射为有界遥控意图；水平正值按候选配置映射为向右，现场核对。
   robot_control::RemoteIntent readRemote() {
@@ -363,8 +442,8 @@ class RobotRuntime {
       else {const float scale=length>1?1/length:1;out.motion={values[0]*scale*params_.max_vx_m_s,-values[1]*scale*params_.max_vy_m_s,0};}
     }
     out.yaw_rate=-channel(rc.rc_rh())*params_.yaw_rate_rad_s;
-    // 本车已确认抬枪pitch为负；分离主程序前推右杆应使枪口上抬。
-    out.pitch_rate=(params_.separate_only?-1.0f:1.0f)*channel(rc.rc_rv())*params_.pitch_rate_rad_s;
+    // 按实车确认的操作方向，右杆前推上仰、后拉下俯。
+    out.pitch_rate=channel(rc.rc_rv())*params_.pitch_rate_rad_s;
     return out;
   }
  private:
@@ -538,7 +617,7 @@ class RobotRuntime {
         (p.actual_speed_limit_rad_s>0 && (!std::isfinite(axis_->vel()) || std::fabs(axis_->vel())>p.actual_speed_limit_rad_s)))return false;
     if(board_==robot_control::Board::Chassis)return gimbal_->axis()==Gimbal::Axis::Yaw && drive_!=nullptr &&
         drive_->ready(now) && p.max_target_rate_rad_s>=params_.yaw_rate_rad_s+(params_.separate_only?0:params_.max_w_rad_s);
-    return gimbal_->axis()==Gimbal::Axis::Pitch && p.pitch_limits_confirmed && p.max_target_rate_rad_s>=params_.pitch_rate_rad_s;
+    return gimbal_->axis()==Gimbal::Axis::Pitch && (!p.pitch_position_limits_enabled || p.pitch_limits_confirmed) && p.max_target_rate_rad_s>=params_.pitch_rate_rad_s;
   }
   // 读取本板方向的完整状态；恢复自检需要读取非 Working 安全状态，而非强求控制许可。
   void readPeer(robot_control::ControlInput &in) {
@@ -568,10 +647,43 @@ class RobotRuntime {
       auto &d=robot_main_diagnostics;d.board=board_==robot_control::Board::Chassis?0:1;
       d.life=static_cast<uint32_t>(o.state.life);d.control=o.control;d.ready=o.ready;
       d.imu=in.imu_ready;d.peer=in.peer_valid;d.axis_valid=in.axis_valid;
+      d.axis_action=static_cast<uint32_t>(o.axis_action);d.axis_enabled=axis_!=nullptr && axis_->is_enabled();
+      d.axis_status=axis_!=nullptr?static_cast<uint32_t>(axis_->status_code()):0xffffffffu;
+      d.prepared=supervisor_.prepared();d.prepare_failed=supervisor_.preparationFailed();
+      d.peer_life=static_cast<uint32_t>(in.peer_state.life);d.peer_ready=in.peer_flags.ready;d.peer_imu=in.peer_flags.imu_ready;
+      d.peer_axis_valid=board_==robot_control::Board::Chassis?in.peer_flags.pitch_feedback_valid:in.peer_flags.yaw_feedback_valid;
+      d.peer_command_valid=in.peer_flags.command_valid;d.peer_fault=in.peer_flags.fault;
       d.yaw_target_rad=o.target.yaw;d.pitch_target_rad=o.target.pitch;
       if(axis_!=nullptr) {d.axis_angle_rad=axis_->angle();d.axis_speed_rad_s=axis_->vel();}
+      d.axis_feedback_torque_valid=in.axis_valid && axis_!=nullptr && std::isfinite(axis_->torq());
+      d.axis_feedback_torque_nm=d.axis_feedback_torque_valid?axis_->torq():0;
+      // 独立观测只能供显示/采样，不写回本地电机反馈或Supervisor输入。
+      const uint32_t feedback_now=hello_world::tick::GetTickMs();
+      auto pitch=pitch_feedback::channel.read(feedback_now);
+      if(board_==robot_control::Board::Gimbal) {
+        pitch={d.axis_angle_rad,d.axis_speed_rad_s,d.axis_feedback_torque_nm,d.axis_feedback_torque_valid!=0};
+        if(gimbal_!=nullptr) {
+          const auto &r=gimbal_->result();pitch.position_target=r.target_rad;pitch.speed_target=r.target_speed_rad_s;
+          pitch.torque_command=r.torque_nm;pitch.feedforward=r.feedforward_nm;pitch.pid_torque=r.pid_torque_nm;
+          pitch.position_error=r.error_rad;pitch.torque_limited=r.torque_limited;pitch.feedforward_endpoint=r.feedforward_endpoint;
+        }
+        pitch.control=o.control;pitch_feedback::channel.publish(pitch,feedback_now);
+        d.pitch_feedback_age_ms=0;d.pitch_feedback_count=0;
+      } else {
+        pitch.valid=pitch.valid && in.peer_valid && in.peer_flags.pitch_feedback_valid;
+        d.pitch_feedback_age_ms=pitch_feedback::channel.age(feedback_now);d.pitch_feedback_count=pitch_feedback::channel.count();
+      }
+      d.pitch_feedback_valid=pitch.valid;d.pitch_feedback_angle_rad=pitch.valid?pitch.angle:0;
+      d.pitch_feedback_speed_rad_s=pitch.valid?pitch.speed:0;d.pitch_feedback_torque_nm=pitch.valid?pitch.torque:0;
+      d.pitch_position_target_rad=pitch.valid?pitch.position_target:0;d.pitch_speed_target_rad_s=pitch.valid?pitch.speed_target:0;
+      d.pitch_torque_nm=pitch.valid?pitch.torque_command:0;d.pitch_feedforward_nm=pitch.valid?pitch.feedforward:0;
+      d.pitch_pid_torque_nm=pitch.valid?pitch.pid_torque:0;d.pitch_position_error_rad=pitch.valid?pitch.position_error:0;
+      d.pitch_control=pitch.valid && pitch.control;d.pitch_torque_limited=pitch.valid && pitch.torque_limited;
+      d.pitch_feedforward_endpoint=pitch.valid && pitch.feedforward_endpoint;
       if(gimbal_!=nullptr) {d.axis_position_target_rad=gimbal_->result().target_rad;d.axis_position_error_rad=gimbal_->result().error_rad;
         d.axis_speed_target_rad_s=gimbal_->result().target_speed_rad_s;d.torque_nm=gimbal_->result().torque_nm;}
+      if(gimbal_!=nullptr) {d.feedforward_nm=gimbal_->result().feedforward_nm;d.pid_torque_nm=gimbal_->result().pid_torque_nm;
+        d.feedforward_endpoint=gimbal_->result().feedforward_endpoint;d.torque_limited=gimbal_->result().torque_limited;}
     }
     GimbalChassisComm::Flags flags;
     flags.ready=o.ready;flags.imu_ready=in.imu_ready;
@@ -642,6 +754,8 @@ class RobotRuntime {
   }
   uint32_t four_fault_token_=0,four_fault_count_=0;
   uint32_t main_tuning_apply_count_=0;
+  bool main_preparation_seen_=false,main_axis_permission_seen_=false,main_axis_was_valid_=false,main_stop_recorded_=false;
+  uint32_t main_stop_count_=0;
   // 发布四个闭环的只读目标/反馈/电流，正常停止后active=0。
   void publishFourSteers() {
     if(!robot_debug::direction::kFour || board_!=robot_control::Board::Chassis)return;
@@ -663,6 +777,8 @@ class RobotRuntime {
   hello_world::motor::DaMiao *axis_=nullptr;Gimbal *gimbal_=nullptr;hello_world::pid::Pid *axis_pid_=nullptr;
   GimbalChassisComm *comm_=nullptr;DrivePort *drive_=nullptr;
   bool transport_ready_=false,imu_started_=false,imu_ready_=false,sensor_polled_=false;
+  bool imu_right_was_down_=false,imu_restart_requested_=false;
+  uint32_t imu_recalibration_count_=0;
   uint32_t poll_count_=0,ready_updates_=0,max_poll_gap_ms_=0,imu_drop_count_=0;
   bool health_was_fresh_=false;
   uint32_t imu_sample_ms_=0,last_poll_ms_=0;float imu_yaw_=0;

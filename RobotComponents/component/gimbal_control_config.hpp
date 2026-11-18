@@ -7,6 +7,7 @@ namespace gimbal_control_config {
 inline constexpr robot::Gimbal::Params kYaw=[] {
   robot::Gimbal::Params p;p.speed_pid=pid_config::kYawSpeed;
   if(main_tuning::enabled) {p.max_torque_nm=ROBOT_YAW_TORQUE_NM;p.max_target_rate_rad_s=ROBOT_YAW_TARGET_RATE_RPM*main_tuning::rpm;
+    p.velocity_ff_nm_per_rad_s=ROBOT_YAW_VELOCITY_FF;
     p.max_speed_rad_s=pid_config::kYaw.output_limit;p.max_dt_s=0.003f;p.actual_speed_limit_rad_s=ROBOT_YAW_TRIP_RPM*main_tuning::rpm;}
   return p;
 }();
@@ -14,10 +15,16 @@ inline constexpr robot::Gimbal::Params kYaw=[] {
 inline constexpr robot::Gimbal::Params kPitch = [] {
   robot::Gimbal::Params params;
   params.speed_pid=pid_config::kPitchSpeed;
+  // Main采用集中开关；历史零动力回归保留原来的限位行为。
+  params.pitch_position_limits_enabled=!main_tuning::enabled || ROBOT_PITCH_POSITION_LIMIT_ENABLED==1;
   params.pitch_limits_confirmed = true;params.pitch_guard_rad=ROBOT_PITCH_GUARD_RAD;
   params.pitch_min_rad = ROBOT_PITCH_MIN_RAD;
   params.pitch_max_rad = ROBOT_PITCH_MAX_RAD;
   if(main_tuning::enabled) {params.max_torque_nm=ROBOT_PITCH_TORQUE_NM;
+    params.gravity_ff_enabled=ROBOT_PITCH_GRAVITY_FF_ENABLED==1;
+    params.gravity_cos_nm=ROBOT_PITCH_GRAVITY_FF_COS_NM;params.gravity_sin_nm=ROBOT_PITCH_GRAVITY_FF_SIN_NM;
+    params.gravity_bias_nm=ROBOT_PITCH_GRAVITY_FF_BIAS_NM;
+    params.gravity_fit_min_rad=ROBOT_PITCH_GRAVITY_FF_MIN_RAD;params.gravity_fit_max_rad=ROBOT_PITCH_GRAVITY_FF_MAX_RAD;
     params.max_target_rate_rad_s=ROBOT_PITCH_TARGET_RATE_RPM*main_tuning::rpm;
     params.max_speed_rad_s=pid_config::kPitch.output_limit;params.max_dt_s=0.003f;
     params.actual_speed_limit_rad_s=ROBOT_PITCH_TRIP_RPM*main_tuning::rpm;}

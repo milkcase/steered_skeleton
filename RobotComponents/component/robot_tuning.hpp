@@ -22,7 +22,7 @@
 #endif
 // 最终电流绝对上限，单位A；C620可编码边界20A
 #ifndef ROBOT_DRIVE_CURRENT_LIMIT_A
-#define ROBOT_DRIVE_CURRENT_LIMIT_A 2.000f
+#define ROBOT_DRIVE_CURRENT_LIMIT_A 4.000f
 #endif
 // 速度环积分输出上限，单位A
 #ifndef ROBOT_DRIVE_INTEGRAL_LIMIT_A
@@ -92,13 +92,14 @@
 #endif
 
 // ==================== 三、yaw水平轴DM-J4310（底盘执行）：以下为待实机整定初值 ====================
-// 右杆本方向满幅时瞄准目标移动的角速度，rpm；回中冻结角度目标
+// yaw左右瞄准速度独立入口：右杆左右满幅时角度目标的稳态变化率，rpm；回中冻结角度目标。
+// 不由第五组加速度决定；实际跟随还受位置环速度/目标变化率/力矩能力约束。
 #ifndef ROBOT_YAW_AIM_RPM
 #define ROBOT_YAW_AIM_RPM 30.0f
 #endif
 // 位置环P；角度误差rad→目标速度rad/s
 #ifndef ROBOT_YAW_POSITION_KP
-#define ROBOT_YAW_POSITION_KP 4.0f
+#define ROBOT_YAW_POSITION_KP 15.0f
 #endif
 // 位置环I
 #ifndef ROBOT_YAW_POSITION_KI
@@ -118,19 +119,19 @@
 #endif
 // 速度环P；速度误差rad/s→力矩Nm
 #ifndef ROBOT_YAW_SPEED_KP
-#define ROBOT_YAW_SPEED_KP 0.12f
+#define ROBOT_YAW_SPEED_KP 0.42f
 #endif
 // 速度环I；pitch悬停需要用积分补偿持续负载，仍须现场整定
 #ifndef ROBOT_YAW_SPEED_KI
-#define ROBOT_YAW_SPEED_KI 0.1f
+#define ROBOT_YAW_SPEED_KI 0.0f
 #endif
 // 速度环D
 #ifndef ROBOT_YAW_SPEED_KD
-#define ROBOT_YAW_SPEED_KD 0.0f
+#define ROBOT_YAW_SPEED_KD 0.0005f
 #endif
 // 最终力矩绝对上限，Nm；不是恒力矩输出，不保证足以悬停
 #ifndef ROBOT_YAW_TORQUE_NM
-#define ROBOT_YAW_TORQUE_NM 0.5f
+#define ROBOT_YAW_TORQUE_NM 2.0f
 #endif
 // 速度环积分输出上限，Nm
 #ifndef ROBOT_YAW_SPEED_INTEGRAL_NM
@@ -146,13 +147,14 @@
 #endif
 
 // ==================== 四、pitch俯仰轴DM-J4310（云台执行，参数由底盘下发）：以下为待实机整定初值 ====================
-// 右杆本方向满幅时瞄准目标移动的角速度，rpm；回中冻结角度目标
+// pitch上下瞄准速度独立入口：右杆上下满幅时角度目标的稳态变化率，rpm；回中冻结角度目标。
+// 不由第五组加速度决定；实际跟随还受位置环速度/目标变化率/力矩能力约束。
 #ifndef ROBOT_PITCH_AIM_RPM
-#define ROBOT_PITCH_AIM_RPM 5.0f
+#define ROBOT_PITCH_AIM_RPM 20.0f
 #endif
 // 位置环P；角度误差rad→目标速度rad/s
 #ifndef ROBOT_PITCH_POSITION_KP
-#define ROBOT_PITCH_POSITION_KP 5.0f
+#define ROBOT_PITCH_POSITION_KP 15.0f
 #endif
 // 位置环I
 #ifndef ROBOT_PITCH_POSITION_KI
@@ -172,11 +174,11 @@
 #endif
 // 速度环P；速度误差rad/s→力矩Nm
 #ifndef ROBOT_PITCH_SPEED_KP
-#define ROBOT_PITCH_SPEED_KP 0.2f
+#define ROBOT_PITCH_SPEED_KP 1.0f
 #endif
 // 速度环I；pitch悬停需要用积分补偿持续负载，仍须现场整定
 #ifndef ROBOT_PITCH_SPEED_KI
-#define ROBOT_PITCH_SPEED_KI 0.5f
+#define ROBOT_PITCH_SPEED_KI 0.0f
 #endif
 // 速度环D
 #ifndef ROBOT_PITCH_SPEED_KD
@@ -184,7 +186,7 @@
 #endif
 // 最终力矩绝对上限，Nm；不是恒力矩输出，不保证足以悬停
 #ifndef ROBOT_PITCH_TORQUE_NM
-#define ROBOT_PITCH_TORQUE_NM 0.5f
+#define ROBOT_PITCH_TORQUE_NM 2.0f
 #endif
 // 速度环积分输出上限，Nm
 #ifndef ROBOT_PITCH_SPEED_INTEGRAL_NM
@@ -199,14 +201,20 @@
 #define ROBOT_PITCH_TRIP_RPM (ROBOT_PITCH_POSITION_SPEED_RPM*2.0f)
 #endif
 
-// ==================== 五、云台瞄准平滑度（两轴共用） ====================
-// 偏杆时目标瞄准角速度的变化率，rpm/s；回中立刻冻结目标角度，闭环继续保持
+// ==================== 五、云台瞄准加速度（两轴共用，仅决定加减速快慢） ====================
+// 单位rpm/s，不是转速上限：yaw/pitch稳态瞄准速度分别由各自ROBOT_*_AIM_RPM决定。
+// 从静止到满幅的加速时间约为该轴AIM_RPM/本参数；0取消此平滑。回中立即冻结目标，闭环保持。
 #ifndef ROBOT_AIM_ACCEL_RPM_S
-#define ROBOT_AIM_ACCEL_RPM_S 20.0f
+#define ROBOT_AIM_ACCEL_RPM_S 120.0f
 #endif
 
-// ==================== 六、pitch现场已确认的机械安全区（rad） ====================
-// 最小俯仰角，枪口仰起方向为负；仅换零位/机械结构后重新核对
+// ==================== 六、pitch目标角度限位（rad） ====================
+// 1限制角度目标并启用边界保护带，0关闭。实测越界时保持闭环并禁止向外施力。
+#ifndef ROBOT_PITCH_POSITION_LIMIT_ENABLED
+#define ROBOT_PITCH_POSITION_LIMIT_ENABLED 1
+#endif
+static_assert(ROBOT_PITCH_POSITION_LIMIT_ENABLED==0 || ROBOT_PITCH_POSITION_LIMIT_ENABLED==1,"pitch角度限位开关只能为0或1");
+// 标定后数值的最小俯仰角，换零位或机械结构后重新核对。
 #ifndef ROBOT_PITCH_MIN_RAD
 #define ROBOT_PITCH_MIN_RAD (-0.419f)
 #endif
@@ -214,7 +222,7 @@
 #ifndef ROBOT_PITCH_MAX_RAD
 #define ROBOT_PITCH_MAX_RAD 0.515f
 #endif
-// 边界保护带，rad；进入保护带后禁止继续向外施力
+// 边界保护带，rad；按剩余角度限制向外的速度目标，实际越界才阻断向外力矩。
 #ifndef ROBOT_PITCH_GUARD_RAD
 #define ROBOT_PITCH_GUARD_RAD 0.03f
 #endif
@@ -228,3 +236,30 @@
 #ifndef ROBOT_MOTOR_DEBUG_CURRENT_LIMIT_A
 #define ROBOT_MOTOR_DEBUG_CURRENT_LIMIT_A 0.100f
 #endif
+
+// ==================== 八、云台前馈（和PID合计后受总力矩限幅） ====================
+// yaw速度前馈Kv，Nm/(rad/s)：乘速度内环目标值；建议先保持原PID，只逐步调此系数。
+#ifndef ROBOT_YAW_VELOCITY_FF
+#define ROBOT_YAW_VELOCITY_FF 0.08f
+#endif
+// pitch重力前馈：A*cos(实际角度)+B*sin(实际角度)+C，Nm；由七组静止保持扭矩指令拟合。
+#ifndef ROBOT_PITCH_GRAVITY_FF_ENABLED
+#define ROBOT_PITCH_GRAVITY_FF_ENABLED 1
+#endif
+#ifndef ROBOT_PITCH_GRAVITY_FF_COS_NM
+#define ROBOT_PITCH_GRAVITY_FF_COS_NM 0.6283247f
+#endif
+#ifndef ROBOT_PITCH_GRAVITY_FF_SIN_NM
+#define ROBOT_PITCH_GRAVITY_FF_SIN_NM (-0.3856459f)
+#endif
+#ifndef ROBOT_PITCH_GRAVITY_FF_BIAS_NM
+#define ROBOT_PITCH_GRAVITY_FF_BIAS_NM 0.0f
+#endif
+// 下面是实测拟合覆盖的角度区间；区间外采用曲线端点，不外推，也不限制枪口运动。
+#ifndef ROBOT_PITCH_GRAVITY_FF_MIN_RAD
+#define ROBOT_PITCH_GRAVITY_FF_MIN_RAD (-0.412754297f)
+#endif
+#ifndef ROBOT_PITCH_GRAVITY_FF_MAX_RAD
+#define ROBOT_PITCH_GRAVITY_FF_MAX_RAD 0.531520844f
+#endif
+static_assert(ROBOT_PITCH_GRAVITY_FF_ENABLED==0 || ROBOT_PITCH_GRAVITY_FF_ENABLED==1,"重力前馈开关只能为0或1");

@@ -349,11 +349,27 @@ extern "C" int run_tests() {
   test_now+=1000;sample(false);CHECK(!imu.update());
   test_now+=5000;sample(false);CHECK(!imu.update() && !imu.isReady());
   CHECK(imu.state()==ImuEstimator::State::Fault);
+  CHECK(!imu.restartAfterSampleFault()); // 传感器数据停更仍锁存。
+  // 冲击样本先锁存并撤销就绪，显式请求后必须重新走完静止校准和对齐。
+  sample();CHECK(initForSampling(imu,hw,rotation,cfg));
+  for(int i=0;i<30;++i) {test_now+=1000;sample();CHECK(imu.update());}
+  CHECK(imu.isReady());
+  test_now+=1000;sample();put16(acc_regs+0x12,32767);put16(acc_regs+0x16,32767);
+  CHECK(!imu.update() && !imu.isReady() && imu.state()==ImuEstimator::State::Fault);
+  test_now+=1000;sample();CHECK(!imu.update() && imu.accelFaultDiagnostics().captured);
+  CHECK(imu.restartAfterSampleFault() && !imu.isReady());
+  CHECK(!imu.restartAfterSampleFault());
+  for(int i=0;i<30;++i) {
+    test_now+=1000;sample();CHECK(imu.update());
+    if(i<29)CHECK(!imu.isReady());
+  }
+  CHECK(imu.isReady() && imu.accelFaultDiagnostics().captured);
   // 每一个实际读取事务发生失败都必须立即被识别，不能被后续成功掩盖。
   for(int step=1;step<=5;++step) {
     sample();CHECK(initForSampling(imu,hw,rotation,cfg));
     fail_transaction=transactions+step;test_now+=1000;sample();
     CHECK(!imu.update() && imu.state()==ImuEstimator::State::Fault && !imu.isReady());
+    CHECK(!imu.restartAfterSampleFault());
     fail_transaction=0;
   }
   sample();CHECK(initForSampling(imu,hw,rotation,cfg));test_now+=1000;sample();acc_regs[0]=0;

@@ -8,7 +8,8 @@ namespace main_tuning {
 inline constexpr uint32_t kParameterId=0x212,kParameterAckId=0x213;
 enum Field : uint8_t {Vx,Vy,YawRate,PitchRate,AimAccel,
   PositionP,PositionI,PositionD,PositionIntegral,PositionSpeed,
-  SpeedP,SpeedI,SpeedD,SpeedIntegral,Torque,TargetRate,TripSpeed,PitchMin,PitchMax,PitchGuard,Count};
+  SpeedP,SpeedI,SpeedD,SpeedIntegral,Torque,TargetRate,TripSpeed,PitchMin,PitchMax,PitchGuard,PitchLimitEnabled,
+  GravityEnabled,GravityCos,GravitySin,GravityBias,GravityMin,GravityMax,Count};
 struct Bundle {float value[Count]{};};
 static_assert(sizeof(float)==4 && sizeof(Bundle)==Count*4,"参数协议要求32位float且无结构体填充");
 // 对原始字节计算CRC32，完整参数组校验通过后才允许整体应用。
@@ -25,14 +26,15 @@ inline uint8_t frameCrc(const uint8_t *data) {
 inline void putWord(uint8_t *data,uint32_t word) {for(int i=0;i<4;++i)data[i]=static_cast<uint8_t>(word>>(8*i));}
 // 固定小端读取32位，调用方先检查标准帧、DLC和CRC。
 inline uint32_t getWord(const uint8_t *data) {uint32_t word=0;for(int i=0;i<4;++i)word|=uint32_t(data[i])<<(8*i);return word;}
-// 拒绝非有限数、负增益和不能表示的速度；机械限位还要由实际pitch控制器再次验证。
+// 拒绝非有限数、负增益和不能表示的速度；启用角度限位时，范围还要由实际pitch控制器再次验证。
 inline bool valid(const Bundle &bundle) {
   const auto &v=bundle.value;for(float x:v)if(!std::isfinite(x))return false;
-  for(int i=0;i<Count;++i)if(i!=PitchMin && i!=PitchMax && v[i]<0)return false;
-  return v[Vx]>0 && v[Vx]<=32.767f && v[Vy]>0 && v[Vy]<=32.767f && v[YawRate]>0 && v[PitchRate]>0 &&
+  for(int i=0;i<Count;++i)if(i!=PitchMin && i!=PitchMax && i<GravityCos && v[i]<0)return false;
+  return (v[GravityEnabled]==0 || v[GravityEnabled]==1) && (!v[GravityEnabled] || v[GravityMin]<v[GravityMax]) &&
+    (v[PitchLimitEnabled]==0 || v[PitchLimitEnabled]==1) && v[Vx]>0 && v[Vx]<=32.767f && v[Vy]>0 && v[Vy]<=32.767f && v[YawRate]>0 && v[PitchRate]>0 &&
     v[PositionSpeed]>0 && v[Torque]>0 && v[TargetRate]>=v[PitchRate] &&
-    v[TripSpeed]>v[PositionSpeed] && v[PitchMin]<0 && v[PitchMax]>0 &&
-    v[PitchMin]>-3.14159265f && v[PitchMax]<3.14159265f && v[PitchGuard]<(v[PitchMax]-v[PitchMin])*0.5f;
+    v[TripSpeed]>v[PositionSpeed] && (v[PitchLimitEnabled]==0 || (v[PitchMin]<0 && v[PitchMax]>0 &&
+    v[PitchMin]>-3.14159265f && v[PitchMax]<3.14159265f && v[PitchGuard]<(v[PitchMax]-v[PitchMin])*0.5f));
 }
 // 参数下发源；发送失败不推进页号，ACK只确认整组CRC且有独立新鲜度。
 class Source {
@@ -101,6 +103,8 @@ class Sink {
 // 两个固件有各自独立内存；源只在底盘使用，接收端只在云台使用，调用处持短临界区。
 inline Source parameter_source;
 inline Sink parameter_sink;
-struct Diagnostics {uint32_t ready=0,hash=0,applied_count=0;float pitch_position_p=0,pitch_speed_p=0,pitch_torque_nm=0,max_vx_m_s=0,yaw_rate_rad_s=0,pitch_rate_rad_s=0;};
+struct Diagnostics {uint32_t ready=0,hash=0,applied_count=0,pitch_position_limits_enabled=1,pitch_gravity_ff_enabled=0;
+  float pitch_position_p=0,pitch_speed_p=0,pitch_torque_nm=0,max_vx_m_s=0,yaw_rate_rad_s=0,pitch_rate_rad_s=0;
+  float gravity_cos_nm=0,gravity_sin_nm=0,gravity_bias_nm=0,gravity_fit_min_rad=0,gravity_fit_max_rad=0;};
 }
 extern "C" {inline volatile main_tuning::Diagnostics robot_tuning_diagnostics;}

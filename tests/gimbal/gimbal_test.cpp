@@ -86,7 +86,7 @@ extern "C" int run_tests() {
   CHECK(yaw.update({1,0},state,safety));CHECK(near(yaw.result().target_rad,0.301f));
   CHECK(yaw.configure(limits()));
 
-  // pitch 线性限位、边界向外力矩阻断、越界后失效，不绕回另一侧。
+  // pitch 目标限位、边界向外力矩阻断、越界后只向安全区回拉。
   DaMiao pitch_motor;Pid pitch_pid;configurePid(pitch_pid,false);
   Gimbal pitch(Gimbal::Axis::Pitch,&pitch_motor,&pitch_pid,limits());
   CHECK(pitch.update({0,2},state,safety));
@@ -94,10 +94,15 @@ extern "C" int run_tests() {
   pitch.stop();CHECK(pitch.update({0,-2},state,safety));
   CHECK(near(pitch.result().target_rad,-0.5f) && pitch_motor.input<0);
   pitch_motor.position=0.49f;pitch.stop();CHECK(pitch.update({0,2},state,safety));
-  CHECK(pitch_motor.input==0 && pitch.result().limited && pitch_pid.integralTerm()==0);
+  CHECK(pitch_motor.input>0 && pitch.result().limited);
   CHECK(pitch.update({0,-0.5f},state,safety) && pitch_motor.input<0);
-  pitch_motor.position=-0.49f;pitch.stop();CHECK(pitch.update({0,-2},state,safety));CHECK(pitch_motor.input==0);
-  pitch_motor.position=0.501f;CHECK(!pitch.update({0,0},state,safety));CHECK(pitch_motor.input==0);
+  pitch_motor.position=-0.49f;pitch.stop();CHECK(pitch.update({0,-2},state,safety));CHECK(pitch_motor.input<0);
+  // 当外环请求超过保护带允许的速度时，仍向目标逼近，且不会切断保持力矩。
+  pitch.stop();configurePid(pitch_pid,false,1000);
+  pitch_motor.position=0.495f;CHECK(pitch.update({0,2},state,safety));
+  CHECK(near(pitch.result().target_speed_rad_s,0.3f) && pitch_motor.input>0); // 剩余0.005rad是测试减速带0.05rad的十分之一。
+  configurePid(pitch_pid,false);
+  pitch_motor.position=0.501f;CHECK(pitch.update({0,0},state,safety));CHECK(pitch_motor.input<0);
   pitch_motor.position=0;params=limits();params.pitch_limits_confirmed=false;
   pitch.configure(params);CHECK(!pitch.update({0,0.1f},state,safety));
   params=limits();params.pitch_min_rad=-pi;CHECK(!pitch.configure(params));
@@ -127,23 +132,23 @@ extern "C" int run_tests() {
   Gimbal field_pitch(Gimbal::Axis::Pitch,&pitch_motor,&pitch_pid,params);
   CHECK(field_pitch.configured() && params.pitch_limits_confirmed);
   CHECK(!field_pitch.update({0,0.1f},state,safety) && pitch_motor.input==0);
-  // 仅在模拟器副本中给出非零上限，核对选定边界的钳位、向外归零与越界拒绝控制。
+  // 用当前配置的两端验证目标钳位、保护带内保持及越界回拉。
   params.max_torque_nm=3;params.max_target_rate_rad_s=1000;params.max_speed_rad_s=3;params.speed_pid=limits().speed_pid;
   CHECK(field_pitch.configure(params));
   CHECK(field_pitch.update({0,2},state,safety));
-  CHECK(near(field_pitch.result().target_rad,0.515f) && field_pitch.result().limited);
+  CHECK(near(field_pitch.result().target_rad,params.pitch_max_rad) && field_pitch.result().limited);
   field_pitch.stop();CHECK(field_pitch.update({0,-2},state,safety));
-  CHECK(near(field_pitch.result().target_rad,-0.419f));
-  pitch_motor.position=0.51f;field_pitch.stop();
-  CHECK(field_pitch.update({0,2},state,safety) && pitch_motor.input==0);
+  CHECK(near(field_pitch.result().target_rad,params.pitch_min_rad));
+  pitch_motor.position=params.pitch_max_rad-0.005f;field_pitch.stop();
+  CHECK(field_pitch.update({0,2},state,safety) && pitch_motor.input>0);
   CHECK(field_pitch.update({0,0},state,safety) && pitch_motor.input<0);
-  pitch_motor.position=-0.414f;field_pitch.stop();
-  CHECK(field_pitch.update({0,-2},state,safety) && pitch_motor.input==0);
+  pitch_motor.position=params.pitch_min_rad+0.005f;field_pitch.stop();
+  CHECK(field_pitch.update({0,-2},state,safety) && pitch_motor.input<0);
   CHECK(field_pitch.update({0,0},state,safety) && pitch_motor.input>0);
-  pitch_motor.position=0.516f;
-  CHECK(!field_pitch.update({0,0},state,safety) && pitch_motor.input==0);
-  pitch_motor.position=-0.420f;
-  CHECK(!field_pitch.update({0,0},state,safety) && pitch_motor.input==0);
+  pitch_motor.position=params.pitch_max_rad+0.001f;
+  CHECK(field_pitch.update({0,0},state,safety) && pitch_motor.input<0);
+  pitch_motor.position=params.pitch_min_rad-0.001f;
+  CHECK(field_pitch.update({0,0},state,safety) && pitch_motor.input>0);
 
   // 状态模式切换清积分；正常连续调用则保持本回路自己的积分历史。
   configurePid(pid,true,0,1);yaw.configure(limits());
@@ -172,5 +177,55 @@ extern "C" int run_tests() {
   CHECK(!yaw.update({0.01f,0},state,safety) && motor.input==0);
   motor.velocity=3.9f;CHECK(yaw.update({0.01f,0},state,safety) && motor.input<0);
   params.actual_speed_limit_rad_s=params.max_speed_rad_s;CHECK(!yaw.configure(params));
+  // 关闭pitch软件角度限位：旧范围外允许闭环、目标不钳位、边界带不清输出；变化率仍有效。
+  configurePid(pitch_pid,false);params=limits();params.pitch_position_limits_enabled=false;params.pitch_limits_confirmed=false;
+  params.max_target_rate_rad_s=1;params.actual_speed_limit_rad_s=4;
+  pitch_motor.position=0.7f;pitch_motor.velocity=0;CHECK(field_pitch.configure(params));
+  CHECK(field_pitch.update({0,0},state,safety) && pitch_motor.input<0);
+  CHECK(near(field_pitch.result().target_rad,0.699f));
+  field_pitch.stop();CHECK(field_pitch.update({0,0.9f},state,safety) && pitch_motor.input>0);
+  CHECK(field_pitch.result().target_rad>params.pitch_max_rad && std::fabs(pitch_motor.input)<=params.max_torque_nm);
+  pitch_motor.velocity=4.01f;CHECK(!field_pitch.update({0,0.9f},state,safety) && pitch_motor.input==0);
+  pitch_motor.velocity=0;safety.remote_valid=false;CHECK(!field_pitch.update({0,0.9f},state,safety));safety=safe();
+  params.pitch_position_limits_enabled=true;params.pitch_limits_confirmed=true;CHECK(field_pitch.configure(params));
+  CHECK(field_pitch.update({0,0.9f},state,safety) && pitch_motor.input<0);
+  CHECK(near(field_pitch.result().target_rad,params.pitch_max_rad));
+  // 越上限时，向外的重力前馈不得抵消向内控制；反馈超速仍立即停机。
+  params.gravity_ff_enabled=true;params.gravity_bias_nm=1;
+  params.gravity_fit_min_rad=-0.5f;params.gravity_fit_max_rad=0.5f;
+  CHECK(field_pitch.configure(params));
+  CHECK(field_pitch.update({0,0.9f},state,safety) && pitch_motor.input<0);
+  CHECK(field_pitch.result().feedforward_nm==0);
+  // 上限处速度目标为零时仍需输出保持扭矩；越界时即使速度环要求向外力矩也要阻断。
+  pitch_motor.position=params.pitch_max_rad;field_pitch.stop();
+  CHECK(field_pitch.update({0,0.9f},state,safety));
+  CHECK(near(field_pitch.result().target_rad,params.pitch_max_rad) && field_pitch.result().target_speed_rad_s==0);
+  CHECK(near(pitch_motor.input,1));
+  pitch_motor.position=params.pitch_max_rad+0.001f;pitch_motor.velocity=-0.1f;
+  CHECK(field_pitch.update({0,0.9f},state,safety) && pitch_motor.input==0);
+  pitch_motor.velocity=4.01f;
+  CHECK(!field_pitch.update({0,0},state,safety) && pitch_motor.input==0);
+  // 速度前馈按内环目标值计算，并与PID一起限力矩；急停不能残留前馈。
+  params=limits();params.velocity_ff_nm_per_rad_s=0.5f;configurePid(pid,true);motor.position=0;motor.velocity=0;
+  CHECK(yaw.configure(params));CHECK(yaw.update({0.1f,0},state,safety));
+  CHECK(near(yaw.result().feedforward_nm,0.1f) && near(yaw.result().pid_torque_nm,0.2f) && near(motor.input,0.3f));
+  // 非零前馈下双向跨过±π，误差仍为最短的±0.02rad，前馈按目标速度变化而非角度数值跳变。
+  yaw.stop();motor.position=pi-0.01f;CHECK(yaw.update({-pi+0.01f,0},state,safety));
+  CHECK(near(yaw.result().error_rad,0.02f) && near(yaw.result().target_speed_rad_s,0.04f));
+  CHECK(near(yaw.result().feedforward_nm,0.02f) && near(motor.input,0.06f));
+  yaw.stop();motor.position=-pi+0.01f;CHECK(yaw.update({pi-0.01f,0},state,safety));
+  CHECK(near(yaw.result().error_rad,-0.02f) && near(yaw.result().target_speed_rad_s,-0.04f));
+  CHECK(near(yaw.result().feedforward_nm,-0.02f) && near(motor.input,-0.06f));
+  motor.position=0;params.velocity_ff_nm_per_rad_s=100;CHECK(yaw.configure(params));
+  CHECK(yaw.update({0.1f,0},state,safety));CHECK(near(motor.input,3) && yaw.result().torque_limited);
+  safety.remote_valid=false;CHECK(!yaw.update({0.1f,0},state,safety) && motor.input==0 && yaw.result().feedforward_nm==0);safety=safe();
+  // 重力曲线用实际角度：只在实测域求值，域外取端点，运动角度不受此域限制。
+  params=limits();params.pitch_position_limits_enabled=false;params.gravity_ff_enabled=true;
+  params.gravity_cos_nm=0.4f;params.gravity_sin_nm=-0.2f;params.gravity_bias_nm=0.1f;
+  params.gravity_fit_min_rad=-0.5f;params.gravity_fit_max_rad=0.5f;pitch_motor.position=0.8f;pitch_motor.velocity=0;
+  configurePid(pitch_pid,false);CHECK(field_pitch.configure(params));CHECK(field_pitch.update({0,0.8f},state,safety));
+  CHECK(near(field_pitch.result().feedforward_nm,0.4f*std::cos(0.5f)-0.2f*std::sin(0.5f)+0.1f));
+  CHECK(field_pitch.result().feedforward_endpoint && near(field_pitch.result().target_rad,0.8f));
+  params.gravity_fit_max_rad=params.gravity_fit_min_rad;CHECK(!field_pitch.configure(params));
   return 0;
 }

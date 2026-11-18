@@ -16,11 +16,16 @@ class Gimbal {
     bool pitch_limits_confirmed=false; // 只有现场确定 pitch 范围后才设 true。
     float pitch_min_rad=0.0f;
     float pitch_max_rad=0.0f;
-    float pitch_guard_rad=0.03f;       // 接近软件边界时阻止继续向外的力矩。
+    float pitch_guard_rad=0.03f;       // 接近目标边界时逐渐限制向外的速度目标。
     float max_dt_s=0.010f;
     float max_speed_rad_s=0.0f;         // 外环输出上限，单位rad/s；不能用力矩上限替代。
     hello_world::pid::Pid::Params speed_pid{}; // 内环以电机速度反馈计算力矩(Nm)，默认停用。
     float actual_speed_limit_rad_s=0; // 非零时按真实反馈独立超速停机；追加字段保留旧聚合初始化顺序。
+    bool pitch_position_limits_enabled=true; // 软件角度上下限开关；关闭后仍执行全部力矩/超速/输入许可检查。
+    float velocity_ff_nm_per_rad_s=0; // 速度前馈：系数×内环目标角速度，单位Nm/(rad/s)。
+    bool gravity_ff_enabled=false; // 无实测拟合数据时关闭，不能猜测重力补偿力矩。
+    float gravity_cos_nm=0,gravity_sin_nm=0,gravity_bias_nm=0;
+    float gravity_fit_min_rad=0,gravity_fit_max_rad=0; // 只限制前馈曲线求值区间，不限制运动角度。
   };
   struct Safety {
     bool remote_valid=false;       // 有效且未过期的 DBUS/板间遥控输入。
@@ -37,13 +42,16 @@ class Gimbal {
     bool limited=false;    // 目标或边界力矩被限制。
     bool valid=false;      // false 时不得沿用目标，实际输入已尽可能归零。
     float target_speed_rad_s=0.0f,speed_error_rad_s=0.0f;
+    float feedforward_nm=0,pid_torque_nm=0;
+    bool feedforward_endpoint=false; // 实际角度在拟合区间外时采用端点补偿，避免外推。
+    bool torque_limited=false; // PID与前馈请求之和被总力矩预算截断。
   };
 
   // 绑定本板一轴、PID 和达妙对象；仅初始化内存中的零输入，不调用使能或 CAN 发送。
   Gimbal(Axis axis,hello_world::motor::DaMiao *motor,hello_world::pid::Pid *pid,const Params &params)
       : axis_(axis),motor_(motor),pid_(pid) { configure(params); }
 
-  // 保存并检查位置环限制，清积分与目标历史；未知 pitch 范围保持停用。
+  // 保存并检查位置环限制，清积分与目标历史；启用角度限位时未知pitch范围保持停用。
   bool configure(const Params &params) {
     stop();params_=params;speed_pid_.configure(params.speed_pid);
     configured_=(axis_==Axis::Yaw || axis_==Axis::Pitch) &&
@@ -55,7 +63,10 @@ class Gimbal {
         std::isfinite(params.max_speed_rad_s) && params.max_speed_rad_s>=0 && speed_pid_.configured();
     configured_=configured_ && std::isfinite(params.actual_speed_limit_rad_s) && params.actual_speed_limit_rad_s>=0 &&
       (params.actual_speed_limit_rad_s==0 || params.actual_speed_limit_rad_s>params.max_speed_rad_s);
-    if(axis_==Axis::Pitch && params.pitch_limits_confirmed) {
+    configured_=configured_ && std::isfinite(params.velocity_ff_nm_per_rad_s) && std::isfinite(params.gravity_cos_nm) &&
+      std::isfinite(params.gravity_sin_nm) && std::isfinite(params.gravity_bias_nm) && std::isfinite(params.gravity_fit_min_rad) &&
+      std::isfinite(params.gravity_fit_max_rad) && (!params.gravity_ff_enabled || params.gravity_fit_min_rad<params.gravity_fit_max_rad);
+    if(axis_==Axis::Pitch && params.pitch_position_limits_enabled && params.pitch_limits_confirmed) {
       configured_=configured_ && params.pitch_min_rad> -kPi && params.pitch_max_rad<kPi &&
           params.pitch_min_rad<params.pitch_max_rad &&
           params.pitch_guard_rad<(params.pitch_max_rad-params.pitch_min_rad)*0.5f;
@@ -74,22 +85,23 @@ class Gimbal {
         params_.max_torque_nm<=0 || params_.max_target_rate_rad_s<=0 ||
         !motor_->is_enabled() || motor_->get_input_type()!=hello_world::motor::InputType::kTorq)
       return fail();
-    if(axis_==Axis::Pitch && !params_.pitch_limits_confirmed)return fail();
+    if(axis_==Axis::Pitch && params_.pitch_position_limits_enabled && !params_.pitch_limits_confirmed)return fail();
     // 约束 PID 不超过本模块和驱动限幅，避免下游截断而上游积分继续堆积。
     if(!loopsReady())return fail();
     const float measured=motor_->angle();
     const float measured_speed=motor_->vel();
     if(!std::isfinite(measured) || !std::isfinite(measured_speed))return fail();
     if(params_.actual_speed_limit_rad_s>0 && std::fabs(measured_speed)>params_.actual_speed_limit_rad_s)return fail();
-    // pitch 反馈已越界时不自动拉回，直接撤销控制；需要检查实物/零点后再恢复。
-    if(axis_==Axis::Pitch && (measured<params_.pitch_min_rad || measured>params_.pitch_max_rad))return fail();
+    const bool limit_pitch=axis_==Axis::Pitch && params_.pitch_position_limits_enabled;
+    const bool beyond_max=limit_pitch && measured>params_.pitch_max_rad;
+    const bool beyond_min=limit_pitch && measured<params_.pitch_min_rad;
     if(have_state_ && (state.chassis_mode!=previous_state_.chassis_mode ||
         state.gimbal_mode!=previous_state_.gimbal_mode)) {
       pid_->reset();speed_pid_.reset();have_target_=false;
     }
     Result next;
     float goal=axis_==Axis::Yaw?wrap(requested.yaw):requested.pitch;
-    if(axis_==Axis::Pitch) {
+    if(limit_pitch) {
       const float bounded=clamp(goal,params_.pitch_min_rad,params_.pitch_max_rad);
       next.limited=bounded!=goal;goal=bounded;
     }
@@ -100,20 +112,36 @@ class Gimbal {
     if(!std::isfinite(change) || !std::isfinite(max_step))return fail();
     const float step=clamp(change,-max_step,max_step);
     next.limited=next.limited || step!=change;
-    next.target_rad=axis_==Axis::Yaw?wrap(base+step):clamp(base+step,params_.pitch_min_rad,params_.pitch_max_rad);
+    next.target_rad=axis_==Axis::Yaw?wrap(base+step):(params_.pitch_position_limits_enabled?clamp(base+step,params_.pitch_min_rad,params_.pitch_max_rad):base+step);
     next.error_rad=axis_==Axis::Yaw?wrap(next.target_rad-wrap(measured)):next.target_rad-measured;
     if(!std::isfinite(next.target_rad) || !std::isfinite(next.error_rad))return fail();
     // 外环将角度误差变为目标速度，内环必须减去实际电机速度，不能直接把外环当力矩。
     next.target_speed_rad_s=pid_->updateError(next.error_rad,dt_s);
     if(!pid_->lastUpdateOk())return fail();
+    // 保护带逐渐收紧向外速度目标；速度环仍可制动和施加静止保持力矩。
+    if(limit_pitch && params_.pitch_guard_rad>0) {
+      const float toward_min=params_.max_speed_rad_s*clamp((measured-params_.pitch_min_rad)/params_.pitch_guard_rad,0,1);
+      const float toward_max=params_.max_speed_rad_s*clamp((params_.pitch_max_rad-measured)/params_.pitch_guard_rad,0,1);
+      const float bounded_speed=clamp(next.target_speed_rad_s,-toward_min,toward_max);
+      next.limited=next.limited || bounded_speed!=next.target_speed_rad_s;
+      next.target_speed_rad_s=bounded_speed;
+    }
     next.speed_error_rad_s=next.target_speed_rad_s-measured_speed;
-    next.torque_nm=speed_pid_.update(next.target_speed_rad_s,measured_speed,dt_s);
+    next.feedforward_nm=params_.velocity_ff_nm_per_rad_s*next.target_speed_rad_s;
+    if(axis_==Axis::Pitch && params_.gravity_ff_enabled) {
+      const float angle=clamp(measured,params_.gravity_fit_min_rad,params_.gravity_fit_max_rad);
+      next.feedforward_endpoint=angle!=measured;
+      next.feedforward_nm+=params_.gravity_cos_nm*std::cos(angle)+params_.gravity_sin_nm*std::sin(angle)+params_.gravity_bias_nm;
+    }
+    // 越界时滤掉向外的前馈分量，避免它抵消内环朝安全区返回的力矩。
+    if((beyond_max && next.feedforward_nm>0) || (beyond_min && next.feedforward_nm<0))next.feedforward_nm=0;
+    next.torque_nm=speed_pid_.updateErrorWithFeedforward(next.speed_error_rad_s,next.feedforward_nm,dt_s);
+    next.pid_torque_nm=speed_pid_.feedbackOutput();
     if(!speed_pid_.lastUpdateOk() || !std::isfinite(next.torque_nm))return fail();
-    // 软件边界附近不得向外施力；清积分，避免目标仍在边界外时累积堵转力矩。
-    if(axis_==Axis::Pitch &&
-        ((measured>=params_.pitch_max_rad-params_.pitch_guard_rad && next.torque_nm>0) ||
-         (measured<=params_.pitch_min_rad+params_.pitch_guard_rad && next.torque_nm<0))) {
-      next.torque_nm=0;next.target_speed_rad_s=0;next.limited=true;pid_->reset();speed_pid_.reset();
+    next.torque_limited=std::fabs(next.pid_torque_nm+next.feedforward_nm)>params_.speed_pid.output_limit;
+    // 只有实测越界才阻断合成的向外力矩，同时清除积累的外推积分。
+    if((beyond_max && next.torque_nm>0) || (beyond_min && next.torque_nm<0)) {
+      next.torque_nm=0;next.limited=true;pid_->reset();speed_pid_.reset();
     }
     next.torque_nm=clamp(next.torque_nm,-params_.max_torque_nm,params_.max_torque_nm);
     if(motor_->setInput(next.torque_nm)!=hello_world::motor::Status::kOk)return fail();

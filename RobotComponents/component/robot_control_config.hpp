@@ -29,6 +29,7 @@ inline constexpr Params kControl = [] {
     params.start_level_pitch=true;
     params.max_vx_m_s=params.max_vy_m_s=robot_debug::drive::kMaxTargetSpeed*vehicle_config::kWheelRadiusM;
     params.max_w_rad_s=0.1f;
+    // 两轴满杆稳态瞄准速度分别换算；下面共用的加速度仅决定达到各自速度需要多久。
     params.yaw_rate_rad_s=ROBOT_YAW_AIM_RPM*main_tuning::rpm;
     params.pitch_rate_rad_s=ROBOT_PITCH_AIM_RPM*main_tuning::rpm;
     params.aim_acceleration_rad_s2=ROBOT_AIM_ACCEL_RPM_S*main_tuning::rpm;

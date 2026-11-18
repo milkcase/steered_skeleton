@@ -86,7 +86,10 @@ bool SendBoardCommunication() {
   if(free_mailboxes==0)return false;
   uint8_t data[8];local_comm->encode(data);CAN_TxHeaderTypeDef h{};uint32_t box;
   h.StdId=local_comm->txId();h.DLC=8;
-#if defined(TEST_CHASSIS)
+#if defined(TEST_DUAL_MAIN)
+  // 单进程模拟两板时按本次发送角色选灰色总线，不能把云台也当成底盘CAN2。
+  return HAL_CAN_AddTxMessage(local_comm->txId()==0x210?&hcan2:&hcan1,&h,data,&box)==HAL_OK;
+#elif defined(TEST_CHASSIS)
   return HAL_CAN_AddTxMessage(&hcan2,&h,data,&box)==HAL_OK;
 #else
   return HAL_CAN_AddTxMessage(&hcan1,&h,data,&box)==HAL_OK;
@@ -150,8 +153,14 @@ void axisFeedback(DaMiao &axis,bool enabled=true) {
 #include "direction_runtime_case.hpp"
 #include "drive_runtime_case.hpp"
 #include "main_runtime_case.hpp"
+#if defined(TEST_DUAL_MAIN)
+#include "dual_main_case.hpp"
+#endif
 // 验证真实 Runtime、PID、驱动序列化、任务分发及失效后的零帧/失能帧。
 extern "C" int run_tests() {
+#if defined(TEST_DUAL_MAIN)
+  return runDualMain();
+#endif
   MainTaskInit();CHECK(init_calls==1 && comm_calls==1);
   HAL_TIM_PeriodElapsedCallback(&htim2);CHECK(main_calls==0);
   HAL_TIM_PeriodElapsedCallback(&htim6);CHECK(main_calls==1 && comm_calls==2 && order_ok);

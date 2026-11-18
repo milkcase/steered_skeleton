@@ -129,5 +129,11 @@ extern "C" int run_tests() {
     plant+=0.001f*(-plant+u);
   }
   CHECK(near(plant,1,0.01f));
+  // 前馈占用同一个输出预算，饱和时不再朝外积累；反向误差仍能退出饱和。
+  CHECK(p.configure({.ki=1,.integral_limit=1,.output_limit=1}));
+  for(int i=0;i<20;++i)CHECK(near(p.updateErrorWithFeedforward(1,2),1));
+  CHECK(p.integralTerm()==0 && p.feedbackOutput()==0);
+  CHECK(p.updateErrorWithFeedforward(-1,2)==1 && p.integralTerm()<0);
+  CHECK(p.updateErrorWithFeedforward(0,__builtin_nanf(""))==0 && !p.lastUpdateOk());
   return 0;
 }

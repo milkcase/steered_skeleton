@@ -22,6 +22,7 @@ class Imu {
   bool init(const BMI088HWConfig &hardware, const float rotation[9],
             const ImuEstimator::Params &params=ImuEstimator::Params{}, bool self_test=false) {
     initialized_=false; sensor_timed_=false; hardware_=hardware;
+    sample_restart_allowed_=false;
     // 显式重新初始化才清除旧诊断，不能把上一轮故障记录当作本轮寄存器值。
     accel_fault_={};
     if (__get_IPSR()!=0 || hardware.hspi==nullptr || hardware.acc_cs_port==nullptr ||
@@ -43,7 +44,7 @@ class Imu {
   }
 
   // 按真实当前微秒时间读取一次硬件并推进校准/姿态；同一调度周期只调用一次。
-  // 任一传输失败立即撤销就绪；故障后必须显式调用 init 重新检查硬件。
+  // 任一传输失败立即撤销就绪；只有指定采样故障可由上层在急停时请求重校准。
   bool update() {
     if(!initialized_ || estimator_.state()==ImuEstimator::State::Fault) return false;
     const uint32_t now=nowUs();
@@ -90,7 +91,14 @@ class Imu {
     temperature_pending_=false;
     const bool processed=estimator_.pushSample(acc_body,gyro_body,now);
     // 先由原估计器撤销就绪，再作一次有超时的只读诊断；正常采样不增加 SPI 事务。
-    if(estimator_.state()==ImuEstimator::State::Fault)captureAccelFault(acc_raw);
+    if(estimator_.state()==ImuEstimator::State::Fault) {
+      const auto s=estimator_.sampleDiagnostics();
+      // SPI、芯片ID、温度及数值异常保持原锁存。只允许对时序超期或已读出的冲击超量程样本重校准。
+      sample_restart_allowed_=estimator_.timingDiagnostics().interval_fault ||
+          (std::isfinite(s.acc_norm) && std::isfinite(s.gyro_norm) && s.acc_norm>=0.1f &&
+           (s.acc_norm>35.0f || s.gyro_norm>17.0f));
+      captureAccelFault(acc_raw);
+    }
     return processed;
   }
 
@@ -98,6 +106,13 @@ class Imu {
   bool recalibrate() {
     if(!initialized_ || estimator_.state()==ImuEstimator::State::Fault) return false;
     sensor_timed_=false;
+    return estimator_.recalibrate();
+  }
+  // 消费一次急停恢复请求，重新累计静止样本。保留芯片检查和已锁存的原始故障快照。
+  bool restartAfterSampleFault() {
+    if(__get_IPSR()!=0 || !initialized_ || !sample_restart_allowed_ || estimator_.state()!=ImuEstimator::State::Fault)
+      return false;
+    sample_restart_allowed_=false;
     return estimator_.recalibrate();
   }
   // 查询校准、姿态对齐和新鲜度是否全部满足；上层进入 Working 必须以此为必要条件。
@@ -178,7 +193,7 @@ class Imu {
   AccelFaultDiagnostics accel_fault_{};
   ImuEstimator::Params params_{};
   BMI088ErrState device_error_=kBMI088ErrStateNoErr;
-  bool initialized_=false,sensor_timed_=false;
+  bool initialized_=false,sensor_timed_=false,sample_restart_allowed_=false;
   // 仅描述温度启动等待，不是运动许可；无符号微秒差兼容计数自然回绕。
   static constexpr uint32_t kTemperatureStartupTimeoutUs=1500000;
   // 首次数据门控与温度等待分别限时，不以温度有效或传感器时钟变化代替 DRDY。

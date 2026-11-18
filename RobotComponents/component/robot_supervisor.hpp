@@ -156,6 +156,10 @@ class Supervisor {
   }
   // 返回当前状态与动作许可，只读结果不能代替最新设备状态判断。
   const ControlOutput &output() const {return out_;}
+  // 只读返回本次恢复准备是否已完成，不改变使能窗口或放行动力。
+  bool prepared() const {return armed_;}
+  // 只读返回关节反馈握手是否失败，故障仍由原有状态机要求右下复位。
+  bool preparationFailed() const {return arm_failed_;}
   // pitch 积分目标在实际软件限位后回写，防止持续推杆在边界外累计隐藏目标。
   void acceptPitchTarget(float pitch) {if(std::isfinite(pitch))pitch_=pitch;}
   // 归一化单圈角度供相对 yaw 保持与跟随误差使用。

@@ -31,6 +31,10 @@ class Pid {
   float update(float target, float feedback, float dt_s = 0.001f);
   // 已经由上层计算好误差时使用此入口；仍保留限幅、有效性检查及周期处理。
   float updateError(float error, float dt_s = 0.001f);
+  // 以误差计算PID并叠加前馈；抗积分饱和与最终限幅共同作用于两者之和。
+  float updateErrorWithFeedforward(float error,float feedforward,float dt_s=0.001f);
+  // 返回最终限幅前的PID反馈修正项，便于区分前馈、反馈与实际总输出。
+  float feedbackOutput() const {return feedback_output_;}
 
   // 返回当前参数的只读引用，便于检查增益、限幅和误差周期。
   const Params &params() const { return params_; }
@@ -52,6 +56,7 @@ class Pid {
   float integral_term_ = 0.0f;
   float previous_error_ = 0.0f;
   float output_ = 0.0f;
+  float feedback_output_ = 0.0f;
   bool has_previous_error_ = false;
   bool configured_ = true;
   bool last_update_ok_ = false;
@@ -87,6 +92,7 @@ inline void Pid::reset() {
   integral_term_ = 0.0f;
   previous_error_ = 0.0f;
   output_ = 0.0f;
+  feedback_output_ = 0.0f;
   has_previous_error_ = false;
   last_update_ok_ = false;
 }
@@ -117,7 +123,12 @@ inline float Pid::update(float target, float feedback, float dt_s) {
 // 按误差和时间间隔计算位置式 PID，包含积分限幅、抗饱和与输出限幅。
 // 成功后记录本周期状态；输入或计算异常时清历史并返回零。
 inline float Pid::updateError(float error, float dt_s) {
-  if (!configured_ || !std::isfinite(error) || !std::isfinite(dt_s) ||
+  return updateErrorWithFeedforward(error,0,dt_s);
+}
+
+// 前馈只改变总输出及饱和判定；微分仍只对误差求导，不把前馈变化当作误差突变。
+inline float Pid::updateErrorWithFeedforward(float error,float feedforward,float dt_s) {
+  if (!configured_ || !std::isfinite(error) || !std::isfinite(feedforward) || !std::isfinite(dt_s) ||
       dt_s <= 0.0f || dt_s > params_.max_dt_s) return fail();
   error = normalizeError(error);
   // 第一步：比例项反映当前误差；首次计算不求微分，避免拿默认历史值制造冲击。
@@ -133,7 +144,7 @@ inline float Pid::updateError(float error, float dt_s) {
   if (!std::isfinite(proportional) || !std::isfinite(derivative) ||
       !std::isfinite(increment) || !std::isfinite(proposed_integral)) return fail();
   float next_integral = detail::clampSymmetric(proposed_integral, params_.integral_limit);
-  const float proposed_output = proportional + next_integral + derivative;
+  const float proposed_output = proportional + next_integral + derivative + feedforward;
   if (!std::isfinite(proposed_output)) return fail();
 
   // 第三步：输出已朝某方向饱和时，不再积累会把饱和推得更深的积分。
@@ -144,11 +155,12 @@ inline float Pid::updateError(float error, float dt_s) {
     next_integral = integral_term_;
   }
   const float sum = proportional + next_integral + derivative;
-  if (!std::isfinite(sum)) return fail();
+  if (!std::isfinite(sum) || !std::isfinite(sum+feedforward)) return fail();
 
   // 第四步：提交本周期状态，最后限幅；本类只返回数值，不直接下发给电机。
   integral_term_ = next_integral;
-  output_ = detail::clampSymmetric(sum, params_.output_limit);
+  feedback_output_=sum;
+  output_ = detail::clampSymmetric(sum+feedforward, params_.output_limit);
   previous_error_ = error;
   has_previous_error_ = true;
   last_update_ok_ = true;

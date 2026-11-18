@@ -50,9 +50,10 @@ class RobotCanService {
     if(control && ((chassis_ && (now-last_steer_ms_>=20 || now-last_wheel_ms_>=20)) || now-last_axis_ms_>=20)) {
       robot_->setTransportReady(false);control=false;action=robot_control::AxisAction::Disable;
     }
-    if((control && !robot_->controlStillSafe()) ||
-        (action==robot_control::AxisAction::ArmZero && !robot_->armStillSafe())) {
-      robot_->stop();control=false;action=robot_control::AxisAction::Disable;
+    if(control && !robot_->controlStillSafe()) {
+      robot_->stop(MainStopSource::ControlGate);control=false;action=robot_control::AxisAction::Disable;
+    } else if(action==robot_control::AxisAction::ArmZero && !robot_->armStillSafe()) {
+      robot_->stop(MainStopSource::ArmGate);control=false;action=robot_control::AxisAction::Disable;
     }
     const bool active=control || action==robot_control::AxisAction::ArmZero || action==robot_control::AxisAction::Zero;
     const bool changed=!have_state_ || (was_active_ && !active) || (was_control_ && !control);
@@ -66,6 +67,12 @@ class RobotCanService {
     if(cycle_%3==2)SendBoardCommunication();
     // 参数帧最后排队且预留一个邮箱，不抢占运动/保护/普通板间帧。
     if(main_tuning::enabled && !robot_debug::kDebugEnabled && cycle_%5==3)sendMainTuning();
+    // 云台每2ms最多排一页pitch观测，9页同组；最后排队并留一个邮箱，拥塞时跳过不阻塞控制。
+    if(!chassis_ && main_tuning::enabled && !robot_debug::kDebugEnabled && cycle_%2==0 &&
+        HAL_CAN_GetTxMailboxesFreeLevel(&hcan1)>=2) {
+      uint8_t data[8]{};pitch_feedback::channel.frame(data,now);
+      if(send(&hcan1,pitch_feedback::kId,data))pitch_feedback::channel.sent();
+    }
     cycle_=(cycle_+1)%60;
   }
  private:
@@ -152,7 +159,7 @@ class RobotCanService {
       for(int i=0;i<4;++i) {
         if(motors[i]==nullptr || motors[i]->motor_info().id<1 || motors[i]->motor_info().id>4 ||
             !std::isfinite(motors[i]->getInput()) || !motors[i]->encode(data)) {
-          robot_->stop();for(auto &b:data)b=0;abortOld();break;
+          robot_->stop(MainStopSource::GroupEncoding);for(auto &b:data)b=0;abortOld();break;
         }
       }
     }
@@ -165,6 +172,8 @@ class RobotCanService {
   void axisCommand(uint8_t command) {
     if((robot_->debugPreviewEnabled() || robot_->debugPowerEnabled()) && command!=0xFD)return;
     auto *axis=robot_->axis();if(axis==nullptr)return;
+    // 电机仍报告使能时先记下软件主动失能现场，后续禁用反馈不能覆盖首个来源。
+    if(command==0xFD && axis->is_enabled())robot_->recordMainStop(MainStopSource::DisableCommand);
     uint8_t data[8];for(auto &b:data)b=0xFF;data[7]=command;
     send(&hcan2,axis->motor_info().id,data);
   }
@@ -176,7 +185,7 @@ class RobotCanService {
     if(action==robot_control::AxisAction::Disable) {axis->setInput(0);axisCommand(0xFD);return;}
     if(action==robot_control::AxisAction::ArmZero) {
       axis->setInput(0);
-      if(!robot_->armStillSafe()) {robot_->stop();axisCommand(0xFD);return;}
+      if(!robot_->armStillSafe()) {robot_->stop(MainStopSource::ArmGate);axisCommand(0xFD);return;}
       if(!robot_control::MotorFeedbacks().axisEnabled(now)) {
         if(!enable_sent_ || now-last_enable_ms_>=100) {
           axisCommand(0xFC);enable_sent_=true;last_enable_ms_=now;
@@ -184,7 +193,7 @@ class RobotCanService {
         return;
       }
     } else if(action==robot_control::AxisAction::Zero)axis->setInput(0);
-    else if(!robot_->controlStillSafe()) {robot_->stop();axisCommand(0xFD);return;}
+    else if(!robot_->controlStillSafe()) {robot_->stop(MainStopSource::AxisGate);axisCommand(0xFD);return;}
     uint8_t data[8]{};
     if(!axis->encode(data) || axis->tx_id()!=axis->motor_info().id ||
         (data[3]&15)!=0 || data[4]!=0 || data[5]!=0 || (data[6]&0xF0)!=0) {

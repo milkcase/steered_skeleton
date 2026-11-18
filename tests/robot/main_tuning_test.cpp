@@ -2,7 +2,7 @@
 #include "test_support.hpp"
 using namespace main_tuning;
 // 创建合法但不依赖任何实车调参宏的测试参数；增益包含自由小数。
-Bundle sample() {return {{0.6f,0.6f,1.0f,0.5f,2.0f,5.125f,0,0,0,1.0f,0.23f,0.4f,0,0.4f,0.5f,0.5f,2.0f,-0.419f,0.515f,0.03f}};}
+Bundle sample() {return {{0.6f,0.6f,1.0f,0.5f,2.0f,5.125f,0,0,0,1.0f,0.23f,0.4f,0,0.4f,0.5f,0.5f,2.0f,-0.419f,0.515f,0.03f,1.0f}};}
 // 使用真实线协议发完整组；时间按每页5ms推进，除非调用方明确模拟丢页。
 bool group(Source &source,Sink &sink,uint32_t &now) {
   for(int i=0;i<Count+2;++i) {uint8_t frame[8];now+=5;if(!source.frame(frame) || !sink.receive(frame,now))return false;source.sent();}
@@ -42,5 +42,23 @@ extern "C" int run_tests() {
   CHECK(broken.frame(frame));CHECK(!clean.receive(frame,t+181));
   auto bad=sample();bad.value[Torque]=__builtin_nanf("");broken=Source{};broken.load(bad);CHECK(!broken.frame(frame));
   bad=sample();bad.value[TripSpeed]=bad.value[PositionSpeed];broken.load(bad);CHECK(!broken.frame(frame));
+  bad=sample();bad.value[PitchLimitEnabled]=2;broken.load(bad);CHECK(!broken.frame(frame));
+  bad=sample();bad.value[PitchLimitEnabled]=0;bad.value[PitchMin]=1;bad.value[PitchMax]=-1;
+  broken.load(bad);CHECK(broken.frame(frame)); // 关闭后原上下限记录不限制位置，数值有限检查仍保留。
+  // 旧20/21字段组分别缺少角度开关/重力前馈字段，不得提交或通过ACK续租。
+  const int legacy_counts[2]={PitchLimitEnabled,GravityEnabled};
+  for(int legacy_count:legacy_counts) {
+    clean=Sink{};auto legacy=sample();const uint32_t legacy_hash=checksum(&legacy,legacy_count*4);
+    frame[0]=0xd1;frame[1]=0xfe;frame[2]=1;putWord(frame+3,legacy_hash);frame[7]=frameCrc(frame);
+    CHECK(clean.receive(frame,++t));
+    for(int i=0;i<legacy_count;++i) {
+      frame[1]=i;uint32_t word;memcpy(&word,&legacy.value[i],4);putWord(frame+3,word);frame[7]=frameCrc(frame);
+      CHECK(clean.receive(frame,++t));
+    }
+    frame[1]=0xff;putWord(frame+3,legacy_hash);frame[7]=frameCrc(frame);CHECK(!clean.receive(frame,++t));
+    CHECK(!clean.pending(bundle,hash,t));
+    broken.load(sample());frame[0]=0xd2;frame[1]=legacy_count;frame[2]=1;putWord(frame+3,broken.hash());frame[7]=frameCrc(frame);
+    CHECK(!broken.receive(frame,t) && !broken.ready(t));
+  }
   return 0;
 }
