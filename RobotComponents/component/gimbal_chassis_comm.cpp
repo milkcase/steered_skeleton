@@ -46,47 +46,27 @@ bool readNumber(const uint8_t *in,float scale,float &value) {
   return true;
 }
 // 打包共享枚举和安全位；这里只说明本板状态，不生成任何动作许可。
-// 会话号以固定大端编码传输，不能把两板本地指针、全局对象或Ozone诊断当作会话确认。
-void writeToken(uint8_t *out,uint32_t token) {
-  for(int i=0;i<4;++i)out[i]=static_cast<uint8_t>(token>>(24-8*i));
-}
-// 从已校验的完整快照恢复会话号；它仍需与本轮私有挑战、阶段和固定目标共同核对。
-uint32_t readToken(const uint8_t *in) {
-  uint32_t value=0;for(int i=0;i<4;++i)value=(value<<8)|in[i];return value;
-}
-// 诊断格式的生命状态约束：零输出预演只用Dead，动力版只在明确Working时允许command_valid。
-bool validDebugState(const robot::ModuleState &s,const Comm::Flags &f) {
-  if(f.debug_power && !f.debug_preview)return false;
-  if(!f.debug_preview)return true;
-  if(!f.debug_power)return s.life==robot::LifeState::Dead && !f.ready && !f.command_valid;
-  if(s.life==robot::LifeState::Dead)return !f.command_valid;
-  if(s.source!=robot::ControlSource::RemoteControl || s.chassis_mode!=robot::ChassisMode::Separate ||
-      s.gimbal_mode!=robot::GimbalMode::Disabled)return false;
-  if(s.life==robot::LifeState::Working)return f.ready && f.command_valid && f.remote_valid && f.emergency_released;
-  return !f.command_valid;
-}
 bool writeCommon(uint8_t *out,const robot::ModuleState &s,const Comm::Flags &f) {
   if(!robot::isValid(s))return false;
   out[0]=static_cast<uint8_t>(s.life)|(static_cast<uint8_t>(s.chassis_mode)<<2)|
-      (static_cast<uint8_t>(s.gimbal_mode)<<4)|(static_cast<uint8_t>(s.source)<<5)|
-      (f.debug_preview?0x40:0)|(f.debug_power?0x80:0);
+      (static_cast<uint8_t>(s.gimbal_mode)<<4)|(static_cast<uint8_t>(s.source)<<5);
   out[1]=(f.ready?1:0)|(f.imu_ready?2:0)|(f.yaw_feedback_valid?4:0)|(f.pitch_feedback_valid?8:0)|
       (f.remote_valid?16:0)|(f.emergency_released?32:0)|(f.command_valid?64:0)|(f.fault?128:0);
-  return validDebugState(s,f);
+  return !f.debug_preview && !f.debug_power;
 }
 // 检查保留位和生命状态后解码共享枚举及安全位，未知状态不进入缓存。
 bool readCommon(const uint8_t *in,robot::ModuleState &s,Comm::Flags &f) {
-  // bit6明确扩展为零输出预演标记；bit7仍保留，旧版会拒绝预演帧而非误作运动命令。
-  // 最新扩展：bit7为动力调试版本位，必须同时有bit6；旧预演固件拒绝此版本，不能混用。
+  // 旧调试报文占用高两位；Main 拒收并撤销旧控制快照。
+  if((in[0]&0xC0)!=0)return false;
   s.life=static_cast<robot::LifeState>(in[0]&3);
   s.chassis_mode=static_cast<robot::ChassisMode>((in[0]>>2)&3);
   s.gimbal_mode=static_cast<robot::GimbalMode>((in[0]>>4)&1);
   s.source=static_cast<robot::ControlSource>((in[0]>>5)&1);
   f.ready=in[1]&1;f.imu_ready=in[1]&2;f.yaw_feedback_valid=in[1]&4;f.pitch_feedback_valid=in[1]&8;
   f.remote_valid=in[1]&16;f.emergency_released=in[1]&32;f.command_valid=in[1]&64;f.fault=in[1]&128;
-  f.debug_preview=(in[0]&0x40)!=0;
-  f.debug_power=(in[0]&0x80)!=0;
-  return robot::isValid(s) && validDebugState(s,f);
+  f.debug_preview=false;
+  f.debug_power=false;
+  return robot::isValid(s);
 }
 }  // namespace
 
@@ -116,8 +96,7 @@ void robot::GimbalChassisComm::encode(uint8_t tx_data[8]) {
   const bool valid=packLocal(live);
   if(!valid) {for(uint8_t &byte:live)byte=0;live[1]=128;}
   ModuleState state;Flags flags;
-  const bool active=readCommon(live,state,flags) && (permitted(state,flags) ||
-      (flags.debug_power && (code_part_==CodePart::Chassis?chassis_data_.session.phase:gimbal_data_.session.phase)==2));
+  const bool active=readCommon(live,state,flags) && permitted(state,flags);
   if(tx_page_!=0 && tx_control_active_ && !active)tx_page_=0;
   if(tx_page_==0) {
     for(int i=0;i<15;++i)tx_payload_[i]=live[i];
@@ -146,9 +125,9 @@ void robot::GimbalChassisComm::decode(const uint8_t rx_data[8]) {
   if(page==0) {
     ModuleState state;Flags flags;
     if(!readCommon(rx_data+2,state,flags)) {++rx_diagnostics_.format_errors;reject(RxFailure::Header,rx_data);return;}
-    // “没有Working动力许可”不等于“状态心跳离线”；安全心跳及连续预演可沿用旧完整状态。
+    // “没有Working动力许可”不等于“状态心跳离线”；安全心跳可沿用旧完整状态。
     // 新的状态和目标仍须完整提交；安全位下降、坏帧、过期及Working退出仍立即撤销。
-    if(!permitted(state,flags) && !previewContinuation(state,flags,rx_data+2) && !statusContinuation(state,flags)) {
+    if(!permitted(state,flags) && !statusContinuation(state,flags)) {
       recordRxRejection(RxFailure::SafetyPage,rx_data);inhibit_=true;
     }
     const uint8_t advance=static_cast<uint8_t>(seq-last_seq_);
@@ -190,13 +169,6 @@ bool robot::GimbalChassisComm::packLocal(uint8_t out[15]) const {
   if(code_part_==CodePart::Chassis) {
     if(tx_id_!=kChassisTxId || rx_id_!=kGimbalTxId)return false;
     const auto &d=chassis_data_;
-    if(d.flags.debug_power) {
-      const auto &s=d.session;
-      if(s.target!=kDebugTarget || s.profile!=kPowerProfile || s.phase>3 || (s.phase>0 && s.phase<3 && s.token==0) ||
-          (d.state.life==robot::LifeState::Working && s.phase!=2) || !writeCommon(out,d.state,d.flags))return false;
-      writeToken(out+2,s.token);out[6]=s.phase;out[7]=s.target;out[8]=s.profile>>8;out[9]=s.profile;
-      return true;
-    }
     return writeCommon(out,d.state,d.flags) && writeNumber(out+2,d.target.yaw,10000) &&
         writeNumber(out+4,d.target.pitch,10000) && writeNumber(out+6,d.feedback.yaw,10000) &&
         writeNumber(out+8,d.feedback.pitch,10000) && writeNumber(out+10,d.chassis_yaw,10000);
@@ -204,32 +176,6 @@ bool robot::GimbalChassisComm::packLocal(uint8_t out[15]) const {
   if(code_part_==CodePart::Gimbal) {
     if(tx_id_!=kGimbalTxId || rx_id_!=kChassisTxId)return false;
     const auto &d=gimbal_data_;
-    if(d.flags.debug_preview) {
-      const auto &p=d.preview;
-      if(p.valid!=d.flags.remote_valid || (p.right!=1 && p.right!=2 && p.right!=3) ||
-          (p.left!=1 && p.left!=2 && p.left!=3) || std::fabs(p.steer)>1.001f ||
-          d.flags.emergency_released!=(p.valid && p.right!=2))return false;
-      if(!writeCommon(out,d.state,d.flags) || !writeNumber(out+2,p.steer,1000))return false;
-      out[4]=p.right;out[5]=p.neutral?1:0;out[6]=p.other_neutral?1:0;out[7]=p.left;
-      // 双环方向版：第一页显式携带“中心”位，角度0仍可表示向前，不能用角度零代替回中。
-      // 复用后页空间传16位唯一参数编号，保持3页/CRC/超时与原版一致。
-      if(robot_debug::mode::kWideSession && d.flags.debug_power) {
-        out[4]=p.right|0x40|(p.neutral?0x80:0);
-        out[5]=(p.neutral?1:0)|(p.other_neutral?2:0)|(p.left<<2);
-        out[6]=d.session.profile>>8;out[7]=d.session.profile;
-      }
-      if(d.flags.debug_power) {
-        const auto &s=d.session;
-        if(s.target!=kDebugTarget || s.profile!=kPowerProfile || s.phase>2 || (s.phase!=0 && s.token==0) ||
-            (d.state.life==robot::LifeState::Working && s.phase!=2))return false;
-        writeToken(out+8,s.token);out[12]=s.phase;out[13]=s.target;out[14]=robot_debug::mode::kWideSession?0:s.profile;
-        if(robot_debug::drive::kVector) {
-          if(!std::isfinite(p.magnitude) || p.magnitude<0 || p.magnitude>1 || (p.neutral && p.magnitude!=0))return false;
-          out[14]=static_cast<uint8_t>(std::round(p.magnitude*250));
-        }
-      }
-      return true;
-    }
     // 用末字节标明语义，原未转述yaw反馈槽携带对地目标，仍随整组校验提交。
     if(d.world_yaw_target_valid && (!supportsWorldYawTarget(d.state.chassis_mode) || !permitted(d.state,d.flags) ||
         d.flags.yaw_feedback_valid))return false;
@@ -247,38 +193,6 @@ bool robot::GimbalChassisComm::unpackPeer(const uint8_t in[15]) {
   if(code_part_==CodePart::Chassis) {
     GimbalData d;
     if(!readCommon(in,d.state,d.flags))return false;
-    if(d.flags.debug_preview) {
-      if(!d.flags.debug_power && in[14]!=0)return false;
-      auto &p=d.preview;
-      if(robot_debug::mode::kWideSession && d.flags.debug_power) {
-        if(!readNumber(in+2,1000,p.steer) || std::fabs(p.steer)>1.001f ||
-            (in[4]&0x40)==0 || (in[4]&0x3C)!=0 || (in[4]&3)==0 || (in[5]&0xF0)!=0 ||
-            (in[5]>>2)==0 || (in[5]>>2)>3 || (!robot_debug::drive::kVector && in[14]!=0))return false;
-        p.right=in[4]&3;p.left=in[5]>>2;p.neutral=in[5]&1;p.other_neutral=in[5]&2;p.valid=d.flags.remote_valid;
-        if(p.neutral!=((in[4]&0x80)!=0) || (p.neutral && p.steer!=0))return false;
-        if(robot_debug::drive::kVector) {
-          if(in[14]>250 || (p.neutral && in[14]!=0) || (!p.neutral && p.other_neutral && in[14]==0))return false;
-          p.magnitude=in[14]/250.0f;
-        }
-        d.session.token=readToken(in+8);d.session.phase=in[12];d.session.target=in[13];d.session.profile=(in[6]<<8)|in[7];
-        if(d.session.target!=kDebugTarget || d.session.profile!=kPowerProfile || d.session.phase>2 ||
-            (d.session.phase!=0 && d.session.token==0) || (d.state.life==robot::LifeState::Working && d.session.phase!=2) ||
-            d.flags.emergency_released!=(p.valid && p.right!=2))return false;
-        gimbal_data_=d;return true;
-      }
-      if(!readNumber(in+2,1000,p.steer) || std::fabs(p.steer)>1.001f ||
-          (in[4]!=1 && in[4]!=2 && in[4]!=3) || in[5]>1 || in[6]>1 ||
-          (in[7]!=1 && in[7]!=2 && in[7]!=3))return false;
-      if(d.flags.debug_power) {
-        d.session.token=readToken(in+8);d.session.phase=in[12];d.session.target=in[13];d.session.profile=in[14];
-        if(d.session.target!=kDebugTarget || d.session.profile!=kPowerProfile || d.session.phase>2 ||
-            (d.session.phase!=0 && d.session.token==0) ||
-            (d.state.life==robot::LifeState::Working && d.session.phase!=2))return false;
-      } else for(int i=8;i<15;++i)if(in[i]!=0)return false;
-      p.right=in[4];p.left=in[7];p.neutral=in[5]!=0;p.other_neutral=in[6]!=0;p.valid=d.flags.remote_valid;
-      if(d.flags.emergency_released!=(p.valid && p.right!=2))return false;
-      gimbal_data_=d;return true;
-    }
     if(in[14]>1 || (in[14]==1 && (!supportsWorldYawTarget(d.state.chassis_mode) || !permitted(d.state,d.flags) ||
         d.flags.yaw_feedback_valid)))return false;
     if(
@@ -294,15 +208,6 @@ bool robot::GimbalChassisComm::unpackPeer(const uint8_t in[15]) {
   if(code_part_==CodePart::Gimbal) {
     ChassisData d;
     if(!readCommon(in,d.state,d.flags))return false;
-    if(d.flags.debug_power) {
-      d.session.token=readToken(in+2);d.session.phase=in[6];d.session.target=in[7];
-      d.session.profile=(in[8]<<8)|in[9];
-      for(int i=10;i<15;++i)if(in[i]!=0)return false;
-      if(d.session.target!=kDebugTarget || d.session.profile!=kPowerProfile || d.session.phase>3 ||
-          (d.session.phase>0 && d.session.phase<3 && d.session.token==0) ||
-          (d.state.life==robot::LifeState::Working && d.session.phase!=2))return false;
-      chassis_data_=d;return true;
-    }
     if(in[12]!=0 || in[13]!=0 || in[14]!=0 ||
         !readNumber(in+2,10000,d.target.yaw) || !readNumber(in+4,10000,d.target.pitch) ||
         !readNumber(in+6,10000,d.feedback.yaw) || !readNumber(in+8,10000,d.feedback.pitch) ||
@@ -311,48 +216,14 @@ bool robot::GimbalChassisComm::unpackPeer(const uint8_t in[15]) {
   }
   return false;
 }
-// 正常预演分包不清完整快照；只允许读取，permitted仍拒绝任何预演动力许可。
-bool robot::GimbalChassisComm::previewContinuation(const ModuleState &state,const Flags &flags,const uint8_t *page0) const {
-  if(!flags.debug_preview || inhibit_ || isOffline() || flags.fault)return false;
-  const auto &old_flags=code_part_==CodePart::Chassis?gimbal_data_.flags:chassis_data_.flags;
-  const auto &old_state=code_part_==CodePart::Chassis?gimbal_data_.state:chassis_data_.state;
-  if(!old_flags.debug_preview || old_flags.debug_power!=flags.debug_power)return false;
-  // 转向正常回中进入Resurrection待杆，不撤销已经完成的会话；仍不授予任何新许可。
-  // 云台拥有本地DT7，C2G中的remote/released只是转述，拼包撤销时不能用转述空值取消其真实遥控准备。
-  const bool center_wait=robot_debug::mode::kResumable && flags.debug_power && state.life==robot::LifeState::Resurrection &&
-      flags.ready && flags.imu_ready && !flags.fault &&
-      (code_part_==CodePart::Gimbal?flags.yaw_feedback_valid:
-          (flags.pitch_feedback_valid && flags.remote_valid && flags.emergency_released));
-  if(!flags.debug_power && (old_state.life!=state.life || old_state.chassis_mode!=state.chassis_mode ||
-      old_state.gimbal_mode!=state.gimbal_mode || old_state.source!=state.source))return false;
-  if(flags.debug_power) {
-    if((old_state.life!=robot::LifeState::Dead && state.life==robot::LifeState::Dead) ||
-        (old_state.life==robot::LifeState::Working && state.life!=robot::LifeState::Working && !center_wait) ||
-        (old_flags.ready && !flags.ready) || (old_flags.command_valid && !flags.command_valid && !center_wait))return false;
-    if(code_part_==CodePart::Chassis && gimbal_data_.preview.right==1) {
-      float stick=0;
-      if(robot_debug::mode::kWideSession) {
-        // 新版向前的方向角也是0；只按有效回中位撤销，不会在方向跨0时误停。
-        if((page0[4]&0x43)!=0x41 || (!gimbal_data_.preview.neutral && (page0[4]&0x80)!=0))return false;
-      } else if(page0[4]!=1 || !readNumber(page0+2,1000,stick) ||
-          (std::fabs(gimbal_data_.preview.steer)>0.05f && std::fabs(stick)<=0.05f))return false;
-    }
-  }
-  // 任一既有安全条件从真变假，即在第一页撤销旧值；不等待后两页才能响应急停。
-  return !(old_flags.remote_valid && !flags.remote_valid && !(center_wait && code_part_==CodePart::Gimbal)) &&
-      !(old_flags.emergency_released && !flags.emergency_released && !(center_wait && code_part_==CodePart::Gimbal)) &&
-      !(old_flags.imu_ready && !flags.imu_ready) &&
-      !(old_flags.yaw_feedback_valid && !flags.yaw_feedback_valid) &&
-      !(old_flags.pitch_feedback_valid && !flags.pitch_feedback_valid);
-}
 
 // 正常Main的通信在线与动力许可分开：旧完整快照处于Dead/恢复阶段时可连续读取。
 // 仅沿用既有新鲜状态，不提交新碎片、不续接收时间；真实安全下降仍在第一页立即撤销。
 bool robot::GimbalChassisComm::statusContinuation(const ModuleState &state,const Flags &flags) const {
-  if(flags.debug_preview || inhibit_ || isOffline())return false;
+  if(inhibit_ || isOffline())return false;
   const auto &old_flags=code_part_==CodePart::Chassis?gimbal_data_.flags:chassis_data_.flags;
   const auto &old_state=code_part_==CodePart::Chassis?gimbal_data_.state:chassis_data_.state;
-  if(old_flags.debug_preview || old_state.life==LifeState::Working || state.life==LifeState::Working)return false;
+  if(old_state.life==LifeState::Working || state.life==LifeState::Working)return false;
   // Dead→恢复只保留旧Dead，新的恢复状态仍要等三页完整提交；恢复→Dead必须立即撤销。
   if(old_state.life==LifeState::Resurrection && (state.life!=LifeState::Resurrection ||
       state.source!=old_state.source || state.chassis_mode!=old_state.chassis_mode || state.gimbal_mode!=old_state.gimbal_mode))return false;
@@ -364,7 +235,7 @@ bool robot::GimbalChassisComm::statusContinuation(const ModuleState &state,const
 
 // 只检查对端快照的必要控制位，不能替代本板急停、设备反馈及最终输出判断。
 bool robot::GimbalChassisComm::permitted(const ModuleState &state,const Flags &flags) {
-  return !flags.debug_preview && isValid(state) && state.life==LifeState::Working && state.source==ControlSource::RemoteControl &&
+  return isValid(state) && state.life==LifeState::Working && state.source==ControlSource::RemoteControl &&
       (state.chassis_mode!=ChassisMode::Disabled || state.gimbal_mode!=GimbalMode::Disabled) &&
       flags.ready && flags.imu_ready && flags.remote_valid && flags.emergency_released &&
       flags.command_valid && !flags.fault;
@@ -382,12 +253,6 @@ void robot::GimbalChassisComm::recordRxRejection(RxFailure reason,const uint8_t 
     event.page=frame[0]&15;event.seq=frame[1];
     // 只有第一页的这两个字节才表示状态与安全位，其他页保留零避免误读。
     if(event.page==0) {event.state_byte=frame[2];event.flags_byte=frame[3];}
-    // 只有已过CRC和公共字段检查的安全第一页才解释拨杆/回中位；坏帧不能伪装为正常回中。
-    if(reason==RxFailure::SafetyPage && event.page==0 && code_part_==CodePart::Chassis &&
-        robot_debug::mode::kWideSession && (event.state_byte&0xC0)==0xC0 &&
-        (frame[6]&0x40)!=0 && (frame[6]&0x3C)==0 && (frame[6]&3)!=0) {
-      event.control_signal_valid=1;event.right=frame[6]&3;event.neutral=(frame[6]&0x80)!=0;
-    }
   }
   rx_diagnostics_.last_rejection=event;
 }

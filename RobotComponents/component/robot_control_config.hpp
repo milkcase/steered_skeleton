@@ -4,7 +4,7 @@
 #include <cstdint>
 #include "pid.hpp"
 #include "main_control_tuning.hpp"
-#include "drive_debug_tuning.hpp"
+#include "drive_tuning.hpp"
 #include "vehicle_motor_config.hpp"
 namespace robot_control {
 // 两板统一的遥控映射：右下急停、右中回中自检、右上运行；Main左上分离、左中跟随、左下小陀螺。

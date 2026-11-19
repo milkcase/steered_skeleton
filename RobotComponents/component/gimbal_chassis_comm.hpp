@@ -21,8 +21,6 @@
 
 #include "tick.hpp"
 #include "module_state.hpp"
-#include "motor_debug_tuning.hpp"
-#include "motor_debug_mode.hpp"
 
 /* Exported macro ------------------------------------------------------------*/
 namespace robot {
@@ -38,8 +36,6 @@ class GimbalChassisComm {
   static constexpr uint32_t kChassisTxId=0x210, kGimbalTxId=0x211;
   static constexpr uint32_t kOfflineMs=100, kAssemblyMs=10;
   // 当前调试版本比较模式/安全包络，增益只由底盘使用；速度或限流不同仍不能授权。
-  static constexpr uint16_t kPowerProfile=robot_debug::mode::kProfile;
-  static constexpr uint8_t kDebugTarget=robot_debug::mode::kTarget;
   enum class RxFailure : uint32_t {None,Crc,Header,SafetyPage,Order,Assembly,Payload};
   // 保存首次撤销完整快照时的页和安全字节；之后的连带缺页不覆盖，直到重新收齐有效快照。
   struct RxEvent {
@@ -59,11 +55,6 @@ class GimbalChassisComm {
     // 动力调试使用bit6诊断格式并另置bit7；两板必须同时匹配，旧预演版不能授权动力。
     bool debug_power=false;
   };
-  struct DebugSession {
-    uint32_t token=0;
-    uint8_t phase=0,target=kDebugTarget;
-    uint16_t profile=kPowerProfile;
-  };
 
   /* 底盘→云台（C2G）帧数据：字段由新人按考核要求设计。 */
   struct ChassisData {
@@ -79,7 +70,6 @@ class GimbalChassisComm {
     GimbalMotion target{};    // 关节目标 rad，pitch 目标是否采用由后续 Robot 决定。
     GimbalMotion feedback{};  // yaw 是本板关节反馈；pitch 若非本板采样，必须明确有效性/来源。
     float chassis_yaw=0.0f;   // 底盘 IMU 相对起始姿态 yaw，不能当共同绝对航向。
-    DebugSession session{};
   };
   /* 云台→底盘（G2C）帧数据：字段由新人按考核要求设计。 */
   struct GimbalData {
@@ -96,14 +86,6 @@ class GimbalChassisComm {
     float world_yaw_target=0.0f; // 底盘IMU参考系中的yaw目标，分离和跟随时在底盘就地换算。
     bool world_yaw_target_valid=false;
     GimbalMotion feedback{};  // pitch 为本板反馈；yaw 若为转述，不能当成本板独立测量。
-    // 零输出预演使用独立语义；标记置位时线上不再把这些字节解释成正常运动指令。
-    struct PreviewRemote {
-      float steer=0;
-      uint8_t right=2,left=1;
-      bool neutral=false,other_neutral=false,valid=false;
-      float magnitude=0; // 二维径向幅度，与方向分开传输。
-    } preview{};
-    DebugSession session{};
   };
 
   GimbalChassisComm(CodePart code_part, uint32_t tx_id, uint32_t rx_id);
@@ -157,9 +139,6 @@ class GimbalChassisComm {
   uint32_t rx_start_ms_=0;
   bool tx_valid_=false,tx_control_active_=false,has_rx_=false,inhibit_=true;
   RxDiagnostics rx_diagnostics_{};
-  // 仅在安全状态未丢失的同模式零输出预演拼包期间保留上一份新鲜完整快照。
-  // 动力格式仅在同版本下复用原子读取；安全位下降、退出Working或新急停/回中第一页立即撤销。
-  bool previewContinuation(const ModuleState &state,const Flags &flags,const uint8_t *page0) const;
   // 正常Main在Dead/恢复心跳分页期间保留旧完整状态；只允许安全条件不下降，绝不授予Working指令。
   bool statusContinuation(const ModuleState &state,const Flags &flags) const;
   // 检查本地/对端状态与全部比例编码字段，拒绝未知枚举、非有限值和越量程。

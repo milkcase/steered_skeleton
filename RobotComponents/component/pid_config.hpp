@@ -2,8 +2,8 @@
 #define HW_STEERED_PID_CONFIG_HPP_
 #include "pid.hpp"
 #include "main_control_tuning.hpp"
-#include "drive_debug_tuning.hpp"
-#include "steer_debug_safety.hpp"
+#include "drive_tuning.hpp"
+#include "steer_limits.hpp"
 
 namespace pid_config {
 using Params = hello_world::pid::Pid::Params;

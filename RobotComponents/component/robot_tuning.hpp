@@ -227,16 +227,6 @@ static_assert(ROBOT_PITCH_POSITION_LIMIT_ENABLED==0 || ROBOT_PITCH_POSITION_LIMI
 #define ROBOT_PITCH_GUARD_RAD 0.03f
 #endif
 
-// ==================== 七、历史单电机单位置环模式（Main/FourSteer/DriveSpeed/VectorDrive不使用） ====================
-// 仅旧MotorDebugPower的位置P，A/rad；旧协议保留既有档位检查
-#ifndef ROBOT_MOTOR_DEBUG_KP
-#define ROBOT_MOTOR_DEBUG_KP 8.0f
-#endif
-// 仅旧MotorDebugPower的电流上限，A；不用于本次双环整定
-#ifndef ROBOT_MOTOR_DEBUG_CURRENT_LIMIT_A
-#define ROBOT_MOTOR_DEBUG_CURRENT_LIMIT_A 0.100f
-#endif
-
 // ==================== 八、云台前馈（和PID合计后受总力矩限幅） ====================
 // yaw速度前馈Kv，Nm/(rad/s)：乘速度内环目标值；建议先保持原PID，只逐步调此系数。
 #ifndef ROBOT_YAW_VELOCITY_FF

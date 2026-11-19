@@ -2,8 +2,8 @@
 #define STEERED_CHASSIS_IK_CONFIG_HPP_
 #include "chassis_iksolver.hpp"
 #include "main_control_tuning.hpp"
-#include "drive_debug_tuning.hpp"
-#include "steer_debug_safety.hpp"
+#include "drive_tuning.hpp"
+#include "steer_limits.hpp"
 namespace chassis_ik_config {
 // Main采用统一调参文件的轮速/舵角变化率；关闭Main的历史回归仍保留零动力配置。
 // 几何量固定读取已确认的 vehicle_motor_config.hpp，本文件不重复维护尺寸。

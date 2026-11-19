@@ -4,7 +4,6 @@
 #include "chassis.hpp"
 #include "chassis_ik_config.hpp"
 #include "pid_config.hpp"
-#include "vector_drive_debug.hpp"
 namespace robot {
 class DriveController : public DrivePort {
  public:
@@ -14,7 +13,6 @@ class DriveController : public DrivePort {
       hello_world::pid::Pid *const steer_pid[4],Chassis::Solver *solver,
       const hello_world::pid::Pid::Params *steer_speed_params=pid_config::kSteerSpeed) : chassis_(chassis),solver_(solver) {
     for(int i=0;i<4;++i) {wheels_[i]=wheels[i];steers_[i]=steers[i];wp_[i]=wheel_pid[i];sp_[i]=steer_pid[i];}
-    if(robot_debug::drive::kVector)vector_.bind(steers);
     for(int i=0;i<4;++i)if(steer_speed_params!=nullptr)ss_[i].configure(steer_speed_params[i]);
     stop();
   }
@@ -60,11 +58,9 @@ class DriveController : public DrivePort {
       }
       wheel_targets_[i]=goal;
       const float wheel=wp_[i]->update(goal,speeds[i],dt);
-      if(!robot_debug::kDebugEnabled) {
-        robot_debug::publishLoops(robot_drive_diagnostics[i],{1,0,0,0,0,goal,speeds[i],goal-speeds[i],wheel/robot_debug::drive::kRawPerAmp});
-        robot_debug::publishLoops(robot_four_steer_diagnostics[i],{1,0,targets.wheels[i].steer_rad,angles[i],
-          Chassis::Solver::wrapAngle(targets.wheels[i].steer_rad-angles[i]),target_speed,steer_speeds[i],target_speed-steer_speeds[i],steer});
-      }
+      robot_diagnostics::publishLoops(robot_drive_diagnostics[i],{1,0,0,0,0,goal,speeds[i],goal-speeds[i],wheel/robot_debug::drive::kRawPerAmp});
+      robot_diagnostics::publishLoops(robot_four_steer_diagnostics[i],{1,0,targets.wheels[i].steer_rad,angles[i],
+        Chassis::Solver::wrapAngle(targets.wheels[i].steer_rad-angles[i]),target_speed,steer_speeds[i],target_speed-steer_speeds[i],steer});
       if(!sp_[i]->lastUpdateOk() || !ss_[i].lastUpdateOk() || !wp_[i]->lastUpdateOk() ||
           steers_[i]->setInput(steer)!=hello_world::motor::Status::kOk ||
           wheels_[i]->setInput(wheel)!=hello_world::motor::Status::kOk) {stop();return false;}
@@ -80,20 +76,9 @@ class DriveController : public DrivePort {
       if(wp_[i]!=nullptr)wp_[i]->reset();
       if(sp_[i]!=nullptr)sp_[i]->reset();
       ss_[i].reset();wheel_targets_[i]=0;
-      if(!robot_debug::kDebugEnabled) {robot_drive_diagnostics[i].active=0;robot_four_steer_diagnostics[i].active=0;}
+      robot_drive_diagnostics[i].active=0;robot_four_steer_diagnostics[i].active=0;
     }
   }
- private:
-  VectorDriveDebug vector_;
- public:
-  // 委托组合调试逆解/四舵独立双环，不使能其余驱动。
-  bool vectorUpdate(float angle,float magnitude,float yaw,float dt,float &speed) override {return vector_.update(angle,magnitude,yaw,dt,speed);}
-  // 复查本板四舵条件。
-  bool vectorSafe(uint32_t now) const override {return vector_.safe(now);}
-  // 只生成四舵当前帧。
-  bool vectorFrame(uint8_t *data) override {return vector_.frame(data);}
-  // 清组合调试私有状态。
-  void vectorStop() override {vector_.stop();}
  private:
   // 非负增益、有限输出及正确周期是闭环放行的必要条件，不依赖驱动静默截断。
   static bool pidReady(const hello_world::pid::Pid *pid,float limit,float period) {

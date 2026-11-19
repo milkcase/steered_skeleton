@@ -3,66 +3,12 @@
     "configurePresets": [
         {
             "name": "Main",
-            "displayName": "默认主程序：分离模式全轮组与云台",
+            "displayName": "Main 整车固件",
             "inherits": "Debug",
             "binaryDir": "${sourceDir}/build",
             "cacheVariables": {
                 "CMAKE_CXX_FLAGS_DEBUG": "-g -Og",
-                "CMAKE_PROJECT_INCLUDE": "${sourceDir}/../tests/robot/debug_preview_output.cmake"
-            }
-        },
-        {
-            "name": "VectorDrive",
-            "displayName": "二维舵轮解算：四转向+仅左前驱动",
-            "description": "左杆幅度给车速、方向经坐标逆解；四舵连续投影，仅左前M3508输出",
-            "inherits": "Debug",
-            "binaryDir": "${sourceDir}/build/VectorDrive",
-            "cacheVariables": {
-                "CMAKE_CXX_FLAGS_DEBUG": "-g -Og -DROBOT_MOTOR_DEBUG_POWER_ENABLED=1 -DROBOT_DRIVE_SPEED_ENABLED=1 -DROBOT_DRIVE_TUNING_ENABLED=1 -DROBOT_VECTOR_DRIVE_ENABLED=1",
-                "CMAKE_PROJECT_INCLUDE": "${sourceDir}/../tests/robot/debug_preview_output.cmake"
-            }
-        },
-        {
-            "name": "FourSteer",
-            "displayName": "四转向授权：云台失能",
-            "inherits": "Debug",
-            "binaryDir": "${sourceDir}/build/FourSteer",
-            "cacheVariables": {
-                "CMAKE_CXX_FLAGS_DEBUG": "-g -DROBOT_MOTOR_DEBUG_POWER_ENABLED=1 -DROBOT_STEER_DIRECTION_ENABLED=1 -DROBOT_FOUR_STEER_ENABLED=1",
-                "CMAKE_PROJECT_INCLUDE": "${sourceDir}/../tests/robot/debug_preview_output.cmake"
-            }
-        },
-        {
-            "name": "DriveSpeed",
-            "displayName": "待验收：左前驱动的云台授权",
-            "description": "左前M3508持续速度PID调参；回中归零可继续；其余电机零/失能",
-            "inherits": "Debug",
-            "binaryDir": "${sourceDir}/build/DriveSpeed",
-            "cacheVariables": {
-                "CMAKE_CXX_FLAGS_DEBUG": "-g -Og -DROBOT_MOTOR_DEBUG_POWER_ENABLED=1 -DROBOT_DRIVE_SPEED_ENABLED=1 -DROBOT_DRIVE_TUNING_ENABLED=1",
-                "CMAKE_PROJECT_INCLUDE": "${sourceDir}/../tests/robot/debug_preview_output.cmake"
-            }
-        },
-        {
-            "name": "SteerDirection",
-            "displayName": "左摇杆二维方向-云台仅授权",
-            "description": "与底盘双环参数版本配对，云台两轴继续失能",
-            "inherits": "Debug",
-            "binaryDir": "${sourceDir}/build/SteerDirection",
-            "cacheVariables": {
-                "CMAKE_CXX_FLAGS_DEBUG": "-g -DROBOT_MOTOR_DEBUG_POWER_ENABLED=1 -DROBOT_STEER_DIRECTION_ENABLED=1",
-                "CMAKE_PROJECT_INCLUDE": "${sourceDir}/../tests/robot/debug_preview_output.cmake"
-            }
-        },
-        {
-            "name": "MotorDebugPower",
-            "displayName": "历史单位置环复测（新整定选SteerDirection）",
-            "description": "仅配对历史MotorDebugPower；本次二维方向双环请选SteerDirection，勿混烧",
-            "inherits": "Debug",
-            "binaryDir": "${sourceDir}/build/MotorDebugPower",
-            "cacheVariables": {
-                "CMAKE_CXX_FLAGS_DEBUG": "-g -DROBOT_MOTOR_DEBUG_POWER_ENABLED=1",
-                "CMAKE_PROJECT_INCLUDE": "${sourceDir}/../tests/robot/debug_preview_output.cmake"
+                "CMAKE_PROJECT_INCLUDE": "${sourceDir}/../cmake/main_firmware_output.cmake"
             }
         }
     ],
@@ -70,31 +16,6 @@
         {
             "name": "Main",
             "configurePreset": "Main",
-            "jobs": 6
-        },
-        {
-            "name": "VectorDrive",
-            "configurePreset": "VectorDrive",
-            "jobs": 6
-        },
-        {
-            "name": "FourSteer",
-            "configurePreset": "FourSteer",
-            "jobs": 6
-        },
-        {
-            "name": "DriveSpeed",
-            "configurePreset": "DriveSpeed",
-            "jobs": 6
-        },
-        {
-            "name": "SteerDirection",
-            "configurePreset": "SteerDirection",
-            "jobs": 6
-        },
-        {
-            "name": "MotorDebugPower",
-            "configurePreset": "MotorDebugPower",
             "jobs": 6
         }
     ]
